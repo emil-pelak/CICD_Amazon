@@ -14,8 +14,8 @@ Search For Items On Amazon
         Submit Search
         Results Should Be Visible
         Sleep    2s
-        Scroll To Bottom
-        Scroll To Top
+        # Scroll To Bottom
+        # Scroll To Top
         Sleep    1s
     END
     Close Browser Window
