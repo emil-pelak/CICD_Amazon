@@ -13,9 +13,6 @@ Search For Items On Amazon
         Input Search Query    ${term}
         Submit Search
         Results Should Be Visible
-        Sleep    2s
-        Scroll To Bottom
-        Scroll To Top
         Sleep    1s
     END
     Close Browser Window
