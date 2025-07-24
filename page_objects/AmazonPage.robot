@@ -33,7 +33,8 @@ Open Amazon GUI
 
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules['selenium.webdriver'].ChromeOptions()    sys
-    ${args}=    Create List    --headless    --disable-gpu    --no-sandbox    --disable-dev-shm-usage    --window-size=1920,1080
+    ${temp_profile}=    Evaluate    str(__import__('tempfile').mkdtemp())    tempfile
+    ${args}=    Create List    --headless    --disable-gpu    --no-sandbox    --disable-dev-shm-usage    --window-size=1920x1080    --user-data-dir=${temp_profile}
     FOR    ${arg}    IN    @{args}
         Call Method    ${options}    add_argument    ${arg}
     END
