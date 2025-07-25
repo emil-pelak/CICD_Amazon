@@ -38,4 +38,3 @@ if [[ "$HEADLESS" == "false" && -f "robot_reports/report.html" ]]; then
 fi
 
 echo -e "${GREEN}✅ Zakończono. Raport: robot_reports/report.html${NC}"
-

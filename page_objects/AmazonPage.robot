@@ -16,8 +16,10 @@ ${FIRST_RESULT_LINK}  xpath=(//div[@data-component-type='s-search-result']//h2/a
 
 *** Keywords ***
 Open Amazon Page
-    Run Keyword If    ${HEADLESS}    Open Amazon Headless
-    ...    ELSE    Open Amazon GUI
+    ${headless_env}=    Get Environment Variable    HEADLESS    false
+    ${headless_env}=    Convert To Lower Case    ${headless_env}
+    Set Global Variable    ${HEADLESS}    ${headless_env}
+    Run Keyword If    '${HEADLESS}' == 'true'    Open Amazon Headless    ELSE    Open Amazon GUI
 
 Open Amazon GUI
     ${options}=    Evaluate    sys.modules['selenium.webdriver'].ChromeOptions()    sys
@@ -29,24 +31,27 @@ Open Amazon GUI
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait Until Element Is Visible    ${SEARCH_BAR}    5s
+    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
 
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules['selenium.webdriver'].ChromeOptions()    sys
-    ${temp_profile}=    Evaluate    str(__import__('tempfile').mkdtemp())    tempfile
-    ${args}=    Create List    --headless    --disable-gpu    --no-sandbox    --disable-dev-shm-usage    --window-size=1920x1080    --user-data-dir=${temp_profile}
-    FOR    ${arg}    IN    @{args}
-        Call Method    ${options}    add_argument    ${arg}
-    END
+    Call Method    ${options}    add_argument    headless
+    Call Method    ${options}    add_argument    no-sandbox
+    Call Method    ${options}    add_argument    disable-dev-shm-usage
+    Call Method    ${options}    add_argument    disable-gpu
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait Until Element Is Visible    ${SEARCH_BAR}    5s
+    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
 
 Handle Amazon Interstitial Page
-    ${is_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]
-    Run Keyword If    ${is_present}    Click Button    xpath=//button[contains(text(), 'Continue shopping')]
-    Sleep    1s
+    ${continue_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]
+    Run Keyword If    ${continue_present}    Click Button    xpath=//button[contains(text(), 'Continue shopping')]
+    ${cookies_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@name='accept']
+    Run Keyword If    ${cookies_present}    Click Button    xpath=//input[@name='accept']
+    ${zip_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@aria-labelledby='GLUXZipUpdate-announce']
+    Run Keyword If    ${zip_present}    Press Keys    None    ESCAPE
+    Sleep    2s
 
 Input Search Query
     [Arguments]    ${query}
@@ -79,7 +84,7 @@ Select First Search Result
     Run Keyword And Ignore Error    Wait Until Element Is Enabled    ${FIRST_RESULT_LINK}    10s
     Run Keyword And Ignore Error    Click Element    ${FIRST_RESULT_LINK}
     Sleep    3s
-    Run Keyword And Ignore Error    Press Keys    None    \ue00e
+    Run Keyword And Ignore Error    Press Keys    None    
     Run Keyword And Ignore Error    Wait Until Element Is Visible    ${SEARCH_BAR}    10s
     Sleep    1s
 
