@@ -19,10 +19,14 @@ Open Amazon Page
     ${headless_env}=    Get Environment Variable    HEADLESS    false
     ${headless_env}=    Convert To Lower Case    ${headless_env}
     Set Global Variable    ${HEADLESS}    ${headless_env}
-    Run Keyword If    '${HEADLESS}' == 'true'    Open Amazon Headless    ELSE    Open Amazon GUI
+    IF    '${HEADLESS}' == 'true'
+        Open Amazon Headless
+    ELSE
+        Open Amazon GUI
+    END
 
 Open Amazon GUI
-    ${options}=    Evaluate    sys.modules['selenium.webdriver'].ChromeOptions()    sys
+    ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     Call Method    ${options}    add_argument    --start-maximized
     Call Method    ${options}    add_argument    --disable-infobars
     Call Method    ${options}    add_argument    --disable-extensions
@@ -31,32 +35,70 @@ Open Amazon GUI
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
+    Wait For Page To Load Completely
+    Wait Until Page Contains Element    ${SEARCH_BAR}    30s
+    Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
-    ${options}=    Evaluate    sys.modules['selenium.webdriver'].ChromeOptions()    sys
-    Call Method    ${options}    add_argument    headless
-    Call Method    ${options}    add_argument    no-sandbox
-    Call Method    ${options}    add_argument    disable-dev-shm-usage
-    Call Method    ${options}    add_argument    disable-gpu
+    ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
+    ${arguments}=    Create List
+    ...    --headless=new
+    ...    --disable-blink-features=AutomationControlled
+    ...    --window-size=1920,1080
+    ...    --disable-dev-shm-usage
+    ...    --disable-gpu
+    ...    --no-sandbox
+    ...    --disable-extensions
+    ...    --disable-infobars
+    ...    --lang=en-US
+    ...    user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36
+    FOR    ${arg}    IN    @{arguments}
+        Call Method    ${options}    add_argument    ${arg}
+    END
+    ${exclude}=    Evaluate    ["enable-automation"]
+    Call Method    ${options}    add_experimental_option    excludeSwitches    ${exclude}
+    Call Method    ${options}    add_experimental_option    useAutomationExtension    ${False}
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
+    Sleep    3s
     Handle Amazon Interstitial Page
-    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
+    Wait For Page To Load Completely
+    Sleep    3s
+    FOR    ${i}    IN RANGE    5
+        ${visible}=    Run Keyword And Return Status    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
+        IF    ${visible}
+            Exit For Loop
+        END
+        Log    Retry ${i+1}: Search bar not visible yet...
+        Sleep    3s
+    END
+    IF    not ${visible}
+        Capture Page Screenshot
+        Fail    Search bar not visible after retries.
+    END
+
+Wait For Page To Load Completely
+    ${ready}=    Execute JavaScript    return document.readyState
+    WHILE    '${ready}' != 'complete'
+        Sleep    1s
+        ${ready}=    Execute JavaScript    return document.readyState
+    END
+    Sleep    1s
 
 Handle Amazon Interstitial Page
-    ${continue_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]
+    ${continue_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]    5s
     Run Keyword If    ${continue_present}    Click Button    xpath=//button[contains(text(), 'Continue shopping')]
-    ${cookies_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@name='accept']
+    ${cookies_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@name='accept']    5s
     Run Keyword If    ${cookies_present}    Click Button    xpath=//input[@name='accept']
-    ${zip_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@aria-labelledby='GLUXZipUpdate-announce']
+    ${zip_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//input[@aria-labelledby='GLUXZipUpdate-announce']    5s
     Run Keyword If    ${zip_present}    Press Keys    None    ESCAPE
     Sleep    2s
 
 Input Search Query
     [Arguments]    ${query}
     ${random_delay}=    Evaluate    random.uniform(1.5, 3.5)    random
-    Wait Until Element Is Visible    ${SEARCH_BAR}    10s
+    Scroll Element Into View    ${SEARCH_BAR}
+    Wait Until Element Is Visible    ${SEARCH_BAR}    30s
     Clear Element Text    ${SEARCH_BAR}
     Input Text    ${SEARCH_BAR}    ${query}
     Sleep    ${random_delay}
