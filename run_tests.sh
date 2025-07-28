@@ -5,7 +5,8 @@ GREEN='\033[0;32m'
 NC='\033[0m'
 
 echo -e "${GREEN}🧹 Czyszczenie poprzednich raportów...${NC}"
-rm -rf robot_reports/*
+rm -rf robot_reports
+mkdir -p robot_reports
 
 # Ustal tryb HEADLESS na podstawie środowiska
 if [[ -z "$HEADLESS" ]]; then

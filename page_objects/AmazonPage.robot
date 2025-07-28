@@ -73,7 +73,10 @@ Open Amazon Headless
         Sleep    3s
     END
     IF    not ${visible}
-        Capture Page Screenshot
+        Log    Dumping HTML...
+        ${html}=    Get Source
+        Create File    robot_reports/amazon_fail.html    ${html}
+        Capture Page Screenshot    robot_reports/amazon_fail.png
         Fail    Search bar not visible after retries.
     END
 
