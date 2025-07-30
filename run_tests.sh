@@ -26,7 +26,10 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo -e "${GREEN}🚀 Uruchamianie testów (HEADLESS=$HEADLESS)...${NC}"
-robot --outputdir robot_reports tests/
+robot --outputdir robot_reports \
+      --variable HEADLESS:"${HEADLESS}" \
+      --variable USER_DATA_DIR:"/tmp/robot-$RANDOM" \
+      tests/
 
 # Otwórz raport tylko jeśli HEADLESS == false
 if [[ "$HEADLESS" == "false" && -f "robot_reports/report.html" ]]; then
