@@ -1,5 +1,5 @@
 *** Settings ***
-Library     SeleniumLibrary
+Library    SeleniumLibrary    options=add_argument("--no-sandbox")    add_argument("--disable-dev-shm-usage")    add_argument("--user-data-dir=/tmp/robot-${RANDOM}")
 Resource    ../page_objects/AmazonPage.robot
 Resource    ../keywords/BrowserUtils.robot
 
