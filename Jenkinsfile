@@ -1,29 +1,19 @@
 pipeline {
     agent any
 
-    environment {
-        HEADLESS = 'true'
-        REPORT_PATH = 'robot_reports/report.html'
-    }
-
-    tools {
-        python 'Python 3.12' // dopasuj do lokalnej konfiguracji Jenkinsa
-    }
-
     stages {
         stage('Checkout') {
             steps {
-                git credentialsId: 'github-ssh-jenkins', url: 'git@github.com:emil-pelak/CICD_Amazon.git', branch: 'dev/main'
+                checkout scm
             }
         }
 
-        stage('Setup environment') {
+        stage('Install dependencies') {
             steps {
                 sh '''
-                python3 -m venv venv
-                source venv/bin/activate
-                pip install --upgrade pip
-                pip install -r requirements.txt
+                    python3 -m venv venv
+                    . venv/bin/activate
+                    pip install -r requirements.txt
                 '''
             }
         }
@@ -31,40 +21,31 @@ pipeline {
         stage('Run tests') {
             steps {
                 sh '''
-                chmod +x run_tests.sh
-                ./run_tests.sh
+                    . venv/bin/activate
+                    robot --outputdir robot_reports tests/
                 '''
             }
         }
 
-        stage('Archive Results') {
+        stage('Publish report') {
             steps {
-                archiveArtifacts artifacts: 'robot_reports/**', fingerprint: true
-                publishHTML(target: [
+                publishHTML([
                     allowMissing: false,
                     alwaysLinkToLastBuild: true,
                     keepAll: true,
                     reportDir: 'robot_reports',
                     reportFiles: 'report.html',
-                    reportName: 'Robot Test Report'
+                    reportName: 'Amazon Test Report'
                 ])
             }
         }
 
-        stage('Email Notification') {
+        stage('Send email') {
             steps {
-                mail to: 'twoj.email@domena.pl',
-                     subject: "Wyniki testów - Build #${BUILD_NUMBER}",
-                     body: "Zakończono testy. Zobacz raport: ${BUILD_URL}robot_reports/report.html"
+                mail to: 'emil-pelak@outlook.com',
+                     subject: "Amazon UI Tests - Build ${env.BUILD_NUMBER}",
+                     body: "Wyniki testów dostępne w Jenkinsie: ${env.BUILD_URL}"
             }
-        }
-    }
-
-    post {
-        failure {
-            mail to: 'twoj.email@domena.pl',
-                 subject: "❌ Błąd testów - Build #${BUILD_NUMBER}",
-                 body: "Testy nie powiodły się. Sprawdź logi: ${BUILD_URL}console"
         }
     }
 }
