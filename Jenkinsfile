@@ -21,15 +21,17 @@ pipeline {
         stage('Run tests') {
             steps {
                 sh '''
-                    USER_DATA_DIR="/tmp/robot-$(uuidgen)"
+                    rm -rf /tmp/robot-* || true
+
+                    USER_DATA_DIR="/tmp/robot-$(uuidgen | tr '[:upper:]' '[:lower:]')-$$-$(date +%s)"
                     export USER_DATA_DIR
                     echo "${USER_DATA_DIR}" > .userdata_dir
 
                     . venv/bin/activate
                     robot --outputdir robot_reports \
-                          --variable HEADLESS:true \
-                          --variable USER_DATA_DIR:"${USER_DATA_DIR}" \
-                          tests/
+                        --variable HEADLESS:true \
+                        --variable USER_DATA_DIR:"${USER_DATA_DIR}" \
+                        tests/
                 '''
             }
         }

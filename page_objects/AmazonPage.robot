@@ -44,8 +44,8 @@ Open Amazon GUI
     Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
-    ${user_dir}=   Get Variable Value    ${USER_DATA_DIR}    NONE
-    Run Keyword If    '${user_dir}' == 'NONE'    Fail    USER_DATA_DIR nie został ustawiony z Jenkinsfile.
+    ${user_dir}=   Get Environment Variable    USER_DATA_DIR
+    Log    Using USER_DATA_DIR: ${user_dir}
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${arguments}=    Create List
     ...    --headless=new
