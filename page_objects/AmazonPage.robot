@@ -44,8 +44,8 @@ Open Amazon GUI
     Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
-    ${tmpdir}=     Generate Random String    8    [LOWER]
-    ${user_dir}=   Set Variable    /tmp/robot-${tmpdir}
+    ${user_dir}=   Get Variable Value    ${USER_DATA_DIR}    NONE
+    Run Keyword If    '${user_dir}' == 'NONE'    Fail    USER_DATA_DIR nie został ustawiony z Jenkinsfile.
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${arguments}=    Create List
     ...    --headless=new
