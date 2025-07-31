@@ -4,7 +4,7 @@ Resource    ../page_objects/AmazonPage.robot
 Resource    ../keywords/BrowserUtils.robot
 
 *** Variables ***
-@{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptop
+@{SEARCH_TERMS}    Mouse    Keyboard    Display    Lenovo
 
 *** Test Cases ***
 Search For Items On Amazon
