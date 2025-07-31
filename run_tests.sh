@@ -17,6 +17,9 @@ if [[ -z "$HEADLESS" ]]; then
   fi
 fi
 
+# Losowy unikalny folder USER_DATA_DIR
+export USER_DATA_DIR="/tmp/robot-$(uuidgen)"
+
 echo -e "${GREEN}🐍 Tworzenie środowiska virtualenv...${NC}"
 python3 -m venv venv
 source venv/bin/activate
@@ -28,7 +31,7 @@ pip install -r requirements.txt
 echo -e "${GREEN}🚀 Uruchamianie testów (HEADLESS=$HEADLESS)...${NC}"
 robot --outputdir robot_reports \
       --variable HEADLESS:"${HEADLESS}" \
-      --variable USER_DATA_DIR:"/tmp/robot-$RANDOM" \
+      --variable USER_DATA_DIR:"${USER_DATA_DIR}" \
       tests/
 
 # Otwórz raport tylko jeśli HEADLESS == false

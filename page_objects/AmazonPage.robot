@@ -27,11 +27,15 @@ Open Amazon Page
 
 Open Amazon GUI
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
-    Call Method    ${options}    add_argument    --start-maximized
-    Call Method    ${options}    add_argument    --disable-infobars
-    Call Method    ${options}    add_argument    --disable-extensions
-    Call Method    ${options}    add_argument    --no-sandbox
-    Call Method    ${options}    add_argument    --disable-dev-shm-usage
+    ${arguments}=    Create List
+    ...    --start-maximized
+    ...    --disable-infobars
+    ...    --disable-extensions
+    ...    --no-sandbox
+    ...    --disable-dev-shm-usage
+    FOR    ${arg}    IN    @{arguments}
+        Call Method    ${options}    add_argument    ${arg}
+    END
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
@@ -40,6 +44,8 @@ Open Amazon GUI
     Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
+    ${tmpdir}=     Generate Random String    8    [LOWER]
+    ${user_dir}=   Set Variable    /tmp/robot-${tmpdir}
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${arguments}=    Create List
     ...    --headless=new
@@ -51,6 +57,7 @@ Open Amazon Headless
     ...    --disable-extensions
     ...    --disable-infobars
     ...    --lang=en-US
+    ...    --user-data-dir=${user_dir}
     ...    user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36
     FOR    ${arg}    IN    @{arguments}
         Call Method    ${options}    add_argument    ${arg}
