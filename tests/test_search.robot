@@ -11,7 +11,7 @@ Resource    ../page_objects/AmazonPage.robot
 Test Teardown    Close Browser Window
 
 *** Variables ***
-@{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptop
+@{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptopy
 
 *** Test Cases ***
 Search For Items On Amazon
