@@ -5,11 +5,6 @@ pipeline {
         disableConcurrentBuilds()
     }
 
-    environment {
-        VENV_PATH = 'venv'
-        USER_DATA_DIR = ''
-    }
-
     stages {
         stage('Checkout') {
             steps {
@@ -20,8 +15,8 @@ pipeline {
         stage('Install dependencies') {
             steps {
                 sh '''
-                    python3 -m venv ${VENV_PATH}
-                    . ${VENV_PATH}/bin/activate
+                    python3 -m venv venv
+                    . venv/bin/activate
                     pip install -r requirements.txt
                 '''
             }
@@ -30,20 +25,20 @@ pipeline {
         stage('Run tests') {
             steps {
                 sh '''
-                    echo "🧹 Czyszczenie starych katalogów /tmp/robot-*"
-                    find /tmp -maxdepth 1 -type d -name 'robot-*' -exec rm -rf {} + || true
+                echo "🧹 Czyszczenie starych katalogów /tmp/robot-*"
+                find /tmp -maxdepth 1 -type d -name 'robot-*' -exec rm -rf {} + || true
 
-                    USER_DATA_DIR="/tmp/robot-$(uuidgen | tr '[:upper:]' '[:lower:]')-$(date +%s)"
-                    export USER_DATA_DIR
-                    echo "${USER_DATA_DIR}" > .userdata_dir
+                USER_DATA_DIR="/tmp/robot-$(uuidgen | tr '[:upper:]' '[:lower:]')-$(date +%s)"
+                export USER_DATA_DIR
+                echo "${USER_DATA_DIR}" > .userdata_dir
 
-                    mkdir -p "${USER_DATA_DIR}" && chmod -R 777 "${USER_DATA_DIR}"
+                mkdir -p "${USER_DATA_DIR}/Default" && chmod -R 777 "${USER_DATA_DIR}"
 
-                    . ${VENV_PATH}/bin/activate
-                    robot --outputdir robot_reports \
-                          --variable HEADLESS:true \
-                          --variable USER_DATA_DIR:"${USER_DATA_DIR}" \
-                          tests/
+                . venv/bin/activate
+                robot --outputdir robot_reports \
+                --variable HEADLESS:true \
+                --variable USER_DATA_DIR:"${USER_DATA_DIR}" \
+                tests/
                 '''
             }
         }
@@ -64,8 +59,8 @@ pipeline {
         stage('Send email') {
             steps {
                 mail to: 'emil-pelak@outlook.com',
-                     subject: "✅ Amazon UI Tests - Build #${env.BUILD_NUMBER}",
-                     body: "Wyniki testów dostępne są w Jenkinsie:\n${env.BUILD_URL}"
+                     subject: "Amazon UI Tests - Build ${env.BUILD_NUMBER}",
+                     body: "Wyniki testów dostępne w Jenkinsie: ${env.BUILD_URL}"
             }
         }
     }
@@ -78,7 +73,7 @@ pipeline {
                     echo "🧹 Usuwanie USER_DATA_DIR: ${dir}"
                     sh "rm -rf ${dir} || true"
                 } else {
-                    echo "⚠ USER_DATA_DIR nie został odnaleziony – pomijam czyszczenie"
+                    echo "USER_DATA_DIR nie został odnaleziony – pomijam czyszczenie"
                 }
             }
         }
