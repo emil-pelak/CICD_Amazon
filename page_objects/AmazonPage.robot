@@ -34,6 +34,7 @@ Open Amazon GUI
     Call Method    ${options}    add_argument    --disable-extensions
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
+    Call Method    ${options}    add_argument    --no-first-run
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
@@ -53,6 +54,7 @@ Open Amazon Headless
     ...    --no-sandbox
     ...    --disable-extensions
     ...    --disable-infobars
+    ...    --no-first-run
     ...    --lang=en-US
     ...    user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36
     FOR    ${arg}    IN    @{arguments}
