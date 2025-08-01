@@ -11,11 +11,12 @@ Resource    ../page_objects/AmazonPage.robot
 Test Teardown    Close Browser Window
 
 *** Variables ***
+${USER_DATA_DIR}    %{USER_DATA_DIR}
 @{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptopy
 
 *** Test Cases ***
 Search For Items On Amazon
-    Open Amazon Page
+    Open Amazon Page    ${USER_DATA_DIR}
     FOR    ${term}    IN    @{SEARCH_TERMS}
         Input Search Query    ${term}
         Submit Search

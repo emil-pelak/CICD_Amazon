@@ -34,6 +34,9 @@ pipeline {
 
                 mkdir -p "${USER_DATA_DIR}/Default" && chmod -R 777 "${USER_DATA_DIR}"
 
+                echo "Zawartość USER_DATA_DIR:"
+                ls -la "${USER_DATA_DIR}"
+
                 . venv/bin/activate
                 robot --outputdir robot_reports \
                 --variable HEADLESS:true \
