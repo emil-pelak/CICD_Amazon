@@ -44,6 +44,7 @@ Open Amazon GUI
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${arguments}=    Create List
+    ...    --user-data-dir=${USER_DATA_DIR}
     ...    --headless=new
     ...    --disable-blink-features=AutomationControlled
     ...    --window-size=1920,1080
