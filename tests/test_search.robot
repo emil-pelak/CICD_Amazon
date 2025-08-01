@@ -6,6 +6,7 @@ Library    String
 Library    BuiltIn
 Library    random
 Resource    ../keywords/BrowserUtils.robot
+Resource    ../page_objects/AmazonPage.robot
 
 Test Teardown    Close Browser Window
 
