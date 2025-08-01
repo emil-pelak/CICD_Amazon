@@ -11,7 +11,7 @@ Resource    ../page_objects/AmazonPage.robot
 Test Teardown    Close Browser Window
 
 *** Variables ***
-@{SEARCH_TERMS}    Mouses
+@{SEARCH_TERMS}    Mouse
 
 *** Test Cases ***
 Search For Items On Amazon
