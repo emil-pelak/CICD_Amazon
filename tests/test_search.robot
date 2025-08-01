@@ -15,8 +15,7 @@ Test Teardown    Close Browser Window
 
 *** Test Cases ***
 Search For Items On Amazon
-    ${USER_DATA_DIR}    Get Environment Variable    USER_DATA_DIR
-    Open Amazon Page    ${USER_DATA_DIR}
+    Open Amazon Page
     FOR    ${term}    IN    @{SEARCH_TERMS}
         Input Search Query    ${term}
         Submit Search
