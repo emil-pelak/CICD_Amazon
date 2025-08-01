@@ -1,7 +1,13 @@
 *** Settings ***
 Library    SeleniumLibrary
-Resource    ../page_objects/AmazonPage.robot
+Library    OperatingSystem
+Library    Collections
+Library    String
+Library    BuiltIn
+Library    random
 Resource    ../keywords/BrowserUtils.robot
+
+Test Teardown    Close Browser Window
 
 *** Variables ***
 @{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptop
@@ -15,5 +21,3 @@ Search For Items On Amazon
         Results Should Be Visible
         Sleep    1s
     END
-    Close Browser Window
-
