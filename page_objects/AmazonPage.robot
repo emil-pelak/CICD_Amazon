@@ -16,9 +16,11 @@ ${FIRST_RESULT_LINK}  xpath=(//div[@data-component-type='s-search-result']//h2/a
 
 *** Keywords ***
 Open Amazon Page
+    [Arguments]    ${user_dir}=None
     ${headless_env}=    Get Environment Variable    HEADLESS    false
     ${headless_env}=    Convert To Lower Case    ${headless_env}
     Set Global Variable    ${HEADLESS}    ${headless_env}
+    Run Keyword If    '${user_dir}' != 'None'    Set Global Variable    ${USER_DATA_DIR}    ${user_dir}
     IF    '${HEADLESS}' == 'true'
         Open Amazon Headless
     ELSE

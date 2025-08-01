@@ -11,7 +11,6 @@ Resource    ../page_objects/AmazonPage.robot
 Test Teardown    Close Browser Window
 
 *** Variables ***
-${USER_DATA_DIR}    %{USER_DATA_DIR}
 @{SEARCH_TERMS}    Mouse    Keyboard    Display    Laptopy
 
 *** Test Cases ***
@@ -23,3 +22,6 @@ Search For Items On Amazon
         Results Should Be Visible
         Sleep    1s
     END
+    Select First Search Result
+    Sleep    2s
+    Capture Page Screenshot
