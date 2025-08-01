@@ -44,9 +44,11 @@ Open Amazon GUI
 
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
+    Remove Directory    ${USER_DATA_DIR}    recursive=True
+    Create Directory    ${USER_DATA_DIR}/Default
     ${arguments}=    Create List
     ...    --user-data-dir=${USER_DATA_DIR}
-    ...    --headless=new
+    ...    --headless=chrome
     ...    --disable-blink-features=AutomationControlled
     ...    --window-size=1920,1080
     ...    --disable-dev-shm-usage
@@ -56,6 +58,8 @@ Open Amazon Headless
     ...    --disable-infobars
     ...    --no-first-run
     ...    --lang=en-US
+    ...    --single-process
+    ...    --no-zygote
     FOR    ${arg}    IN    @{arguments}
         Call Method    ${options}    add_argument    ${arg}
     END
