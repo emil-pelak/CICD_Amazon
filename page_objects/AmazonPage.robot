@@ -1,13 +1,11 @@
 *** Settings ***
 Library    SeleniumLibrary
 Library    OperatingSystem
-Library    Collections
-Library    String
 Library    BuiltIn
+Library    String
 Library    random
 
 *** Variables ***
-${HEADLESS}           False
 ${AMAZON_URL}         https://www.amazon.com
 ${SEARCH_BAR}         id=twotabsearchtextbox
 ${SEARCH_BUTTON}      id=nav-search-submit-button
@@ -17,15 +15,10 @@ ${FIRST_RESULT_LINK}  xpath=(//div[@data-component-type='s-search-result']//h2/a
 *** Keywords ***
 Open Amazon Page
     [Arguments]    ${user_dir}=None
-    ${headless_env}=    Get Environment Variable    HEADLESS    false
-    ${headless_env}=    Convert To Lower Case    ${headless_env}
-    Set Global Variable    ${HEADLESS}    ${headless_env}
+    ${headless}=    Get Environment Variable    HEADLESS    false
+    ${headless}=    Convert To Lower Case    ${headless}
     Run Keyword If    '${user_dir}' != 'None'    Set Global Variable    ${USER_DATA_DIR}    ${user_dir}
-    IF    '${HEADLESS}' == 'true'
-        Open Amazon Headless
-    ELSE
-        Open Amazon GUI
-    END
+    Run Keyword If    '${headless}' == 'true'    Open Amazon Headless    ELSE    Open Amazon GUI
 
 Open Amazon GUI
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
@@ -35,31 +28,26 @@ Open Amazon GUI
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
     Call Method    ${options}    add_argument    --no-first-run
+    Run Keyword If    '${USER_DATA_DIR}' != ''    Call Method    ${options}    add_argument    --user-data-dir=${USER_DATA_DIR}
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait For Page To Load Completely
     Wait Until Page Contains Element    ${SEARCH_BAR}    30s
     Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
-    Remove Directory    ${USER_DATA_DIR}    recursive=True
-    Create Directory    ${USER_DATA_DIR}/Default
     ${arguments}=    Create List
-    ...    --user-data-dir=${USER_DATA_DIR}
-    ...    --headless=chrome
-    ...    --disable-blink-features=AutomationControlled
+    ...    --headless=new
     ...    --window-size=1920,1080
-    ...    --disable-dev-shm-usage
     ...    --disable-gpu
     ...    --no-sandbox
     ...    --disable-extensions
     ...    --disable-infobars
-    ...    --no-first-run
+    ...    --disable-dev-shm-usage
     ...    --lang=en-US
-    ...    --single-process
-    ...    --no-zygote
+    ...    --no-first-run
+    Run Keyword If    '${USER_DATA_DIR}' != ''    Append To List    ${arguments}    --user-data-dir=${USER_DATA_DIR}
     FOR    ${arg}    IN    @{arguments}
         Call Method    ${options}    add_argument    ${arg}
     END
@@ -68,30 +56,9 @@ Open Amazon Headless
     Call Method    ${options}    add_experimental_option    useAutomationExtension    ${False}
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
-    Sleep    3s
     Handle Amazon Interstitial Page
-    Wait For Page To Load Completely
-    Sleep    3s
-    FOR    ${i}    IN RANGE    5
-        ${visible}=    Run Keyword And Return Status    Wait Until Element Is Visible    ${SEARCH_BAR}    15s
-        IF    ${visible}
-            Exit For Loop
-        END
-        Log    Retry ${i+1}: Search bar not visible yet...
-        Sleep    3s
-    END
-    IF    not ${visible}
-        Capture Page Screenshot
-        Fail    Search bar not visible after retries.
-    END
-
-Wait For Page To Load Completely
-    ${ready}=    Execute JavaScript    return document.readyState
-    WHILE    '${ready}' != 'complete'
-        Sleep    1s
-        ${ready}=    Execute JavaScript    return document.readyState
-    END
-    Sleep    1s
+    Wait Until Page Contains Element    ${SEARCH_BAR}    30s
+    Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Handle Amazon Interstitial Page
     ${continue_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]    5s
@@ -104,39 +71,24 @@ Handle Amazon Interstitial Page
 
 Input Search Query
     [Arguments]    ${query}
-    ${random_delay}=    Evaluate    random.uniform(1.5, 3.5)    random
     Scroll Element Into View    ${SEARCH_BAR}
     Wait Until Element Is Visible    ${SEARCH_BAR}    30s
     Clear Element Text    ${SEARCH_BAR}
     Input Text    ${SEARCH_BAR}    ${query}
-    Sleep    ${random_delay}
+    Sleep    1.5s
 
 Submit Search
     Click Button    ${SEARCH_BUTTON}
-    Wait Until Page Contains Element    ${SEARCH_BAR}    10s
-    Run Keyword And Ignore Error    Wait Until Element Is Visible    ${SEARCH_RESULTS}    10s
+    Wait Until Page Contains Element    ${SEARCH_RESULTS}    10s
 
 Results Should Be Visible
     Element Should Be Visible    ${SEARCH_RESULTS}
 
-Scroll To Bottom
-    Execute JavaScript    window.scrollTo(0, document.body.scrollHeight)
-    Sleep    2s
-
-Scroll To Top
-    Execute JavaScript    window.scrollTo(0, 0)
-    Sleep    1s
-
 Select First Search Result
-    Run Keyword And Ignore Error    Wait Until Element Is Visible    ${FIRST_RESULT_LINK}    10s
-    Run Keyword And Ignore Error    Scroll Element Into View    ${FIRST_RESULT_LINK}
-    Sleep    1s
-    Run Keyword And Ignore Error    Wait Until Element Is Enabled    ${FIRST_RESULT_LINK}    10s
-    Run Keyword And Ignore Error    Click Element    ${FIRST_RESULT_LINK}
-    Sleep    3s
-    Run Keyword And Ignore Error    Press Keys    None    
-    Run Keyword And Ignore Error    Wait Until Element Is Visible    ${SEARCH_BAR}    10s
-    Sleep    1s
+    Wait Until Element Is Visible    ${FIRST_RESULT_LINK}    10s
+    Scroll Element Into View    ${FIRST_RESULT_LINK}
+    Wait Until Element Is Enabled    ${FIRST_RESULT_LINK}    10s
+    Click Element    ${FIRST_RESULT_LINK}
 
 Close Browser Window
     Close Browser
