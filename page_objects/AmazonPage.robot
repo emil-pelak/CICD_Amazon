@@ -37,20 +37,16 @@ Open Amazon GUI
 
 Open Amazon Headless
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
-    ${arguments}=    Create List
-    ...    --headless=new
-    ...    --window-size=1920,1080
-    ...    --disable-gpu
-    ...    --no-sandbox
-    ...    --disable-extensions
-    ...    --disable-infobars
-    ...    --disable-dev-shm-usage
-    ...    --lang=en-US
-    ...    --no-first-run
-    Run Keyword If    '${USER_DATA_DIR}' != ''    Append To List    ${arguments}    --user-data-dir=${USER_DATA_DIR}
-    FOR    ${arg}    IN    @{arguments}
-        Call Method    ${options}    add_argument    ${arg}
-    END
+    Call Method    ${options}    add_argument    --headless=new
+    Call Method    ${options}    add_argument    --window-size=1920,1080
+    Call Method    ${options}    add_argument    --disable-gpu
+    Call Method    ${options}    add_argument    --no-sandbox
+    Call Method    ${options}    add_argument    --disable-extensions
+    Call Method    ${options}    add_argument    --disable-infobars
+    Call Method    ${options}    add_argument    --disable-dev-shm-usage
+    Call Method    ${options}    add_argument    --lang=en-US
+    Call Method    ${options}    add_argument    --no-first-run
+    Run Keyword If    '${USER_DATA_DIR}' != ''    Call Method    ${options}    add_argument    --user-data-dir=${USER_DATA_DIR}
     ${exclude}=    Evaluate    ["enable-automation"]
     Call Method    ${options}    add_experimental_option    excludeSwitches    ${exclude}
     Call Method    ${options}    add_experimental_option    useAutomationExtension    ${False}
