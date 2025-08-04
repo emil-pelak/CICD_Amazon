@@ -22,6 +22,3 @@ Search For Items On Amazon
         Results Should Be Visible
         Sleep    1s
     END
-    Select First Search Result
-    Sleep    2s
-    Capture Page Screenshot
