@@ -28,7 +28,8 @@ Open Amazon GUI
     Call Method    ${options}    add_argument    --no-sandbox
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
     Call Method    ${options}    add_argument    --no-first-run
-    Run Keyword If    '${USER_DATA_DIR}' != ''    Call Method    ${options}    add_argument    --user-data-dir=${USER_DATA_DIR}
+    Run Keyword If    '${USER_DATA_DIR}' != ''    ${opt}=    Set Variable    --user-data-dir=${USER_DATA_DIR}
+    ...    AND    Call Method    ${options}    add_argument    ${opt}
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
@@ -46,7 +47,8 @@ Open Amazon Headless
     Call Method    ${options}    add_argument    --disable-dev-shm-usage
     Call Method    ${options}    add_argument    --lang=en-US
     Call Method    ${options}    add_argument    --no-first-run
-    Run Keyword If    '${USER_DATA_DIR}' != ''    Call Method    ${options}    add_argument    --user-data-dir=${USER_DATA_DIR}
+    Run Keyword If    '${USER_DATA_DIR}' != ''    ${opt}=    Set Variable    --user-data-dir=${USER_DATA_DIR}
+    ...    AND    Call Method    ${options}    add_argument    ${opt}
     ${exclude}=    Evaluate    ["enable-automation"]
     Call Method    ${options}    add_experimental_option    excludeSwitches    ${exclude}
     Call Method    ${options}    add_experimental_option    useAutomationExtension    ${False}
