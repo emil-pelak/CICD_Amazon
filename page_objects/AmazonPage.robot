@@ -1,7 +1,8 @@
-*** Settings ***
+**** Settings ***
 Library    SeleniumLibrary
 Library    OperatingSystem
 Library    BuiltIn
+Library    Collections
 Library    String
 Library    random
 
@@ -11,16 +12,18 @@ ${SEARCH_BAR}         id=twotabsearchtextbox
 ${SEARCH_BUTTON}      id=nav-search-submit-button
 ${SEARCH_RESULTS}     css=.s-search-results
 ${FIRST_RESULT_LINK}  xpath=(//div[@data-component-type='s-search-result']//h2/a[contains(@href, '/dp/')])[1]
+${USER_DATA_DIR}      ${EMPTY}
 
 *** Keywords ***
 Open Amazon Page
-    [Arguments]    ${user_dir}=None
     ${headless}=    Get Environment Variable    HEADLESS    false
     ${headless}=    Convert To Lower Case    ${headless}
-    Run Keyword If    '${user_dir}' != 'None'    Set Global Variable    ${USER_DATA_DIR}    ${user_dir}
-    Run Keyword If    '${headless}' == 'true'    Open Amazon Headless    ELSE    Open Amazon GUI
+    ${jenkins}=     Get Environment Variable    JENKINS_HOME    ${EMPTY}
+    Run Keyword If    '${headless}' == 'true'    Open Amazon Headless    ${jenkins}
+    ...    ELSE    Open Amazon GUI    ${jenkins}
 
 Open Amazon GUI
+    [Arguments]    ${jenkins_env}
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${args}=    Create List
     ...    --start-maximized
@@ -29,20 +32,19 @@ Open Amazon GUI
     ...    --no-sandbox
     ...    --disable-dev-shm-usage
     ...    --no-first-run
-    Run Keyword If    '${USER_DATA_DIR}' != ''    Append To List    ${args}    --user-data-dir=${USER_DATA_DIR}
+    Run Keyword If    '${jenkins_env}' == '' and '${USER_DATA_DIR}' != ''    Append To List    ${args}    --user-data-dir=${USER_DATA_DIR}
     FOR    ${arg}    IN    @{args}
         Call Method    ${options}    add_argument    ${arg}
     END
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait Until Page Contains Element    ${SEARCH_BAR}    30s
-    Wait Until Element Is Visible    ${SEARCH_BAR}    30s
 
 Open Amazon Headless
+    [Arguments]    ${jenkins_env}
     ${options}=    Evaluate    sys.modules["selenium.webdriver"].ChromeOptions()    sys
     ${args}=    Create List
-    ...    --headless
+    ...    --headless=new
     ...    --window-size=1920,1080
     ...    --disable-gpu
     ...    --no-sandbox
@@ -51,7 +53,7 @@ Open Amazon Headless
     ...    --disable-dev-shm-usage
     ...    --lang=en-US
     ...    --no-first-run
-    Run Keyword If    '${USER_DATA_DIR}' != ''    Append To List    ${args}    --user-data-dir=${USER_DATA_DIR}
+    Run Keyword If    '${jenkins_env}' == '' and '${USER_DATA_DIR}' != ''    Append To List    ${args}    --user-data-dir=${USER_DATA_DIR}
     FOR    ${arg}    IN    @{args}
         Call Method    ${options}    add_argument    ${arg}
     END
@@ -61,8 +63,7 @@ Open Amazon Headless
     Create WebDriver    Chrome    options=${options}
     Go To    ${AMAZON_URL}
     Handle Amazon Interstitial Page
-    Wait Until Page Contains Element    ${SEARCH_BAR}    30s
-    Wait Until Element Is Visible    ${SEARCH_BAR}    30s
+
 
 Handle Amazon Interstitial Page
     ${continue_present}=    Run Keyword And Return Status    Element Should Be Visible    xpath=//button[contains(text(), 'Continue shopping')]    5s
@@ -91,7 +92,6 @@ Results Should Be Visible
 Select First Search Result
     Wait Until Element Is Visible    ${FIRST_RESULT_LINK}    10s
     Scroll Element Into View    ${FIRST_RESULT_LINK}
-    Wait Until Element Is Enabled    ${FIRST_RESULT_LINK}    10s
     Click Element    ${FIRST_RESULT_LINK}
 
 Close Browser Window
