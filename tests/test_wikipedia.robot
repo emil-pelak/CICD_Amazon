@@ -5,7 +5,7 @@ Library     Collections
 
 *** Variables ***
 ${BROWSER}    chrome
-@{SEARCH_TERMS}    Robot Framework    Jenkins    Python
+@{SEARCH_TERMS}    Robot Framework    Jenkins    Pythons
 
 *** Test Cases ***
 Wikipedia Search Multiple Terms
