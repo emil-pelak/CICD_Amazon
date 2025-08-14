@@ -6,11 +6,6 @@ pipeline {
     timestamps()
   }
 
-  parameters {
-    string(name: 'EMAIL_TO',   defaultValue: 'twoj-outlook@example.com', description: 'Adres odbiorcy')
-    string(name: 'EMAIL_FROM', defaultValue: 'twoj-wp@example.com', description: 'Adres nadawcy (musi być zgodny z konfiguracją SMTP)')
-  }
-
   environment {
     HEADLESS = 'true' // tylko headless na Jenkinsie
   }
@@ -68,26 +63,15 @@ pipeline {
   post {
     always {
       script {
-        // Linki do raportów
-        def reportUrl = "${env.BUILD_URL}artifact/robot_reports/report.html"
-        def logUrl    = "${env.BUILD_URL}artifact/robot_reports/log.html"
-        def console   = "${env.BUILD_URL}console"
-
         emailext(
-          to: params.EMAIL_TO,
-          from: params.EMAIL_FROM,
-          subject: "[${currentBuild.currentResult}] ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-          mimeType: 'text/html',
+          subject: "Wynik testów: ${currentBuild.currentResult}",
           body: """
-            <h3>Wynik: ${currentBuild.currentResult}</h3>
-            <p><b>${env.JOB_NAME}</b> #${env.BUILD_NUMBER}</p>
-            <ul>
-              <li><a href="${reportUrl}">Robot Report</a></li>
-              <li><a href="${logUrl}">Robot Log</a></li>
-              <li><a href="${console}">Console Output</a></li>
-            </ul>
+          Build: ${env.BUILD_URL}
+          Raport: ${env.BUILD_URL}artifact/robot_reports/report.html
+          Log: ${env.BUILD_URL}artifact/robot_reports/log.html
           """,
-          attachmentsPattern: 'robot_reports/report.html, robot_reports/log.html'
+          to: 'emil-pelak@outlook.com',
+          from: 'emil-pelak@wp.pl'
         )
       }
       echo "Pipeline finished: ${currentBuild.currentResult}"
