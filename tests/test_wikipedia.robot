@@ -3,15 +3,16 @@ Resource    ../page_objects/WikipediaPage.robot
 Library     SeleniumLibrary
 Library     Collections
 
+Test Teardown    Run Keyword If Test Failed    Capture Page Screenshot
+...              Close Browser Window
+
 *** Variables ***
-${BROWSER}    chrome
-@{SEARCH_TERMS}    Robot Framework    Jenkins    Pythons
+@{SEARCH_TERMS}    Robot Framework    Jenkins    Python
 
 *** Test Cases ***
 Wikipedia Search Multiple Terms
-    Open Wikipedia Home Page
+    Open Wikipedia Page
     FOR    ${term}    IN    @{SEARCH_TERMS}
-        Search Wikipedia    ${term}
-        Wait Until Element Is Visible    css:#firstHeading    10s
-        Page Should Contain    ${term}
+        Search For                 ${term}
+        Heading Should Contain     ${term}
     END

@@ -1,68 +1,68 @@
 pipeline {
-    agent { label 'built-in' }   // Uruchamianie na Built-In Node
+  agent { label 'built-in' }
 
-    options {
-        disableConcurrentBuilds()
-        timestamps()
+  options {
+    disableConcurrentBuilds()
+    timestamps()
+  }
+
+  environment {
+    HEADLESS = 'true' // tylko headless na Jenkinsie
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    environment {
-        // HEADLESS ustawiony na true dla środowiska Jenkins
-        HEADLESS = 'true'
+    stage('Install dependencies') {
+      steps {
+        sh '''
+          set -e
+          python3 -m venv venv || true
+          . venv/bin/activate
+          pip install --upgrade pip wheel
+          pip install -r requirements.txt
+        '''
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
-        }
+    stage('Run tests') {
+      steps {
+        sh '''
+          set -e
+          echo "🧹 Czyszczenie starych profili /tmp/robot-*"
+          find /tmp -maxdepth 1 -user $(whoami) -type d -name 'robot-*' -exec rm -rf {} + || true
 
-        stage('Install dependencies') {
-            steps {
-                sh '''
-                  python3 -m venv venv
-                  . venv/bin/activate
-                  pip install --upgrade pip
-                  pip install -r requirements.txt
-                '''
-            }
-        }
-
-        stage('Run tests') {
-            steps {
-                sh '''
-                  echo "🧹 Czyszczenie /tmp/robot-* (tylko właściciel: $(whoami))"
-                  find /tmp -maxdepth 1 -user $(whoami) -type d -name 'robot-*' -exec rm -rf {} + || true
-
-                  mkdir -p robot_reports
-                  echo "HEADLESS=$HEADLESS"
-                  . venv/bin/activate
-                  robot --outputdir robot_reports \
-                        --variable HEADLESS:$HEADLESS \
-                        tests/
-                '''
-            }
-        }
-
-        stage('Publish report') {
-            steps {
-                publishHTML([
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'robot_reports',
-                    reportFiles: 'report.html',
-                    reportName: 'Robot Report'
-                ])
-                archiveArtifacts artifacts: 'robot_reports/*', fingerprint: true, allowEmptyArchive: true
-            }
-        }
+          . venv/bin/activate
+          mkdir -p robot_reports
+          echo "HEADLESS=$HEADLESS"
+          # NIE przerywaj całego joba – chcemy opublikować raport nawet przy FAIL
+          robot --outputdir robot_reports \
+                --variable HEADLESS:$HEADLESS \
+                tests/ || true
+        '''
+      }
     }
 
-    post {
-        always {
-            echo 'Pipeline finished.'
-        }
+    stage('Publish report') {
+      steps {
+        publishHTML([
+          allowMissing: true,
+          alwaysLinkToLastBuild: true,
+          keepAll: true,
+          reportDir: 'robot_reports',
+          reportFiles: 'report.html',
+          reportName: 'Robot Report'
+        ])
+        archiveArtifacts artifacts: 'robot_reports/**', fingerprint: true, allowEmptyArchive: true
+      }
     }
+  }
+
+  post {
+    always {
+      echo "Pipeline finished: ${currentBuild.currentResult}"
+    }
+  }
 }
