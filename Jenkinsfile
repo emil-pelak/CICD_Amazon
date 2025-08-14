@@ -1,66 +1,78 @@
 pipeline {
-    agent { label 'built-in' }   // Built-In Node
+  agent { label 'built-in' }
 
-    options {
-        disableConcurrentBuilds()
-        timestamps()
+  options {
+    disableConcurrentBuilds()
+    timestamps()
+    buildDiscarder(logRotator(numToKeepStr: '25'))
+  }
+
+  environment {
+    # HEADLESS ustawia matrix niżej; tu default dla lokalnego uruchamiania bez matrix
+    HEADLESS = 'true'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    environment {
-        HEADLESS = 'true'
+    stage('Python venv & deps') {
+      steps {
+        sh '''
+          set -e
+          if [ ! -d venv ]; then python3 -m venv venv; fi
+          . venv/bin/activate
+          pip install --upgrade pip wheel
+          pip install -r requirements.txt
+        '''
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
+    stage('Run tests (matrix headless/gui)') {
+      matrix {
+        axes {
+          axis { name 'MODE'; values 'headless', 'gui' }
         }
-
-        stage('Install dependencies') {
+        stages {
+          stage('Execute') {
             steps {
-                sh '''
-                  python3 -m venv venv
-                  . venv/bin/activate
-                  pip install --upgrade pip
-                  pip install -r requirements.txt
-                '''
-            }
-        }
+              sh '''
+                set -e
+                . venv/bin/activate
+                mkdir -p robot_reports/${MODE}
+                if [ "${MODE}" = "gui" ]; then export HEADLESS=false; else export HEADLESS=true; fi
 
-        stage('Run tests') {
-            steps {
-                sh '''
-                  echo "🧹 Czyszczenie /tmp/robot-* (tylko właściciel: $(whoami))"
-                  find /tmp -maxdepth 1 -user $(whoami) -type d -name 'robot-*' -exec rm -rf {} + || true
-
-                  echo "HEADLESS=$HEADLESS"
-                  . venv/bin/activate
-                  robot --outputdir robot_reports \
-                        --variable HEADLESS:$HEADLESS \
-                        tests/
-                '''
+                echo "Running in MODE=${MODE}, HEADLESS=${HEADLESS}, SEARCH_TERM=${SEARCH_TERM:-Robot Framework}"
+                robot --outputdir robot_reports/${MODE} \
+                      --reporttitle "Wikipedia ${MODE} report" \
+                      --logtitle "Wikipedia ${MODE} log" \
+                      --variable HEADLESS:$HEADLESS \
+                      --variable SEARCH_TERM:"${SEARCH_TERM:-Robot Framework}" \
+                      tests/ || true
+              '''
             }
+          }
         }
-
-        stage('Publish report') {
-            steps {
-                publishHTML([
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'robot_reports',
-                    reportFiles: 'report.html',
-                    reportName: 'Robot Report'
-                ])
-                archiveArtifacts artifacts: 'robot_reports/*', fingerprint: true, allowEmptyArchive: true
-            }
+        post {
+          always {
+            // Publikuj raporty Robot dla każdego wariantu
+            robot outputPath: "robot_reports/${MODE}",
+                  outputFileName: 'output.xml',
+                  reportFileName: 'report.html',
+                  logFileName: 'log.html'
+            archiveArtifacts artifacts: "robot_reports/${MODE}/**", fingerprint: true, allowEmptyArchive: true
+          }
         }
+      }
     }
+  }
 
-    post {
-        always {
-            echo 'Pipeline finished.'
-        }
+  post {
+    always {
+      // Trend testów (opcjonalnie)
+      junit allowEmptyResults: true, testResults: 'robot_reports/**/output.xml'
+      echo "Pipeline finished: ${currentBuild.currentResult}"
     }
+  }
 }

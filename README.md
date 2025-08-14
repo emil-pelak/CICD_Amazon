@@ -1,13 +1,9 @@
-# CICD Allegro – Testy automatyczne
+# CICD_Wikipedia
 
-Zestaw testów dla strony Allegro.pl z użyciem:
+Prosty pipeline Jenkins + Robot Framework (Selenium) testujący wyszukiwanie na Wikipedii.
 
-- Robot Framework
-- SeleniumLibrary
-- Jenkins CI/CD
-- GitHub
-
-## Uruchomienie lokalne
+## Lokalnie
 
 ```bash
-./run_tests.sh
+./run_tests.sh               # HEADLESS=true, SEARCH_TERM="Robot Framework"
+HEADLESS=false SEARCH_TERM="Python" ./run_tests.sh

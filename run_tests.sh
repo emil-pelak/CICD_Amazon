@@ -45,3 +45,25 @@ if [[ "$HEADLESS" == "false" && -f "robot_reports/report.html" ]]; then
 fi
 
 echo -e "${GREEN}✅ Zakończono. Raport: robot_reports/report.html${NC}"
+
+
+# #!/usr/bin/env bash
+# set -euo pipefail
+
+# # Domyślne wartości (możesz nadpisać: HEADLESS=false SEARCH_TERM="Python")
+# : "${HEADLESS:=true}"
+# : "${SEARCH_TERM:=Robot Framework}"
+
+# python3 -m venv venv 2>/dev/null || true
+# . venv/bin/activate
+# pip install --upgrade pip wheel
+# pip install -r requirements.txt
+
+# mkdir -p robot_reports/local
+# echo "Running locally: HEADLESS=${HEADLESS}, SEARCH_TERM=${SEARCH_TERM}"
+# robot --outputdir robot_reports/local \
+#       --variable HEADLESS:${HEADLESS} \
+#       --variable SEARCH_TERM:"${SEARCH_TERM}" \
+#       tests/ || true
+
+# echo "Done. See robot_reports/local/report.html"
