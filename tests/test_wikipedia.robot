@@ -1,14 +1,17 @@
 *** Settings ***
 Resource    ../page_objects/WikipediaPage.robot
 Library     SeleniumLibrary
+Library     Collections
 
 *** Variables ***
 ${BROWSER}    chrome
+@{SEARCH_TERMS}    Robot Framework    Jenkins    Python
 
 *** Test Cases ***
-Wikipedia Search Test
+Wikipedia Search Multiple Terms
     Open Wikipedia Home Page
-    Search Wikipedia    Robot Framework
-    Wait Until Element Is Visible    css:#firstHeading    10s
-    Page Should Contain    Robot Framework
-
+    FOR    ${term}    IN    @{SEARCH_TERMS}
+        Search Wikipedia    ${term}
+        Wait Until Element Is Visible    css:#firstHeading    10s
+        Page Should Contain    ${term}
+    END
