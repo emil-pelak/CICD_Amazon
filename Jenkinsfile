@@ -75,100 +75,104 @@ pipeline {
   post {
     always {
       script {
-        // -------- Links (publisher view avoids CSP) --------
+        // ---- Links (publisher view avoids CSP) ----
         def reportUrl   = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl  = "${env.BUILD_URL}console"
         def zipUrl      = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // -------- Git metadata --------
+        // ---- Git metadata ----
         def branch   = sh(script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} || git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
         def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
         def subject  = sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>"', returnStdout: true).trim()
 
-        // -------- Parse Robot XML + build small thumbnail (Base64) --------
-        // Do it in Python for reliability across RF versions.
-        def parseOut = sh(returnStdout: true, label: 'Parse stats & build thumbnail', script: """
+        // ---- Parse Robot XML + optional thumbnail (Base64) ----
+        def parseOut = sh(returnStdout: true, label: 'Parse stats & build thumbnail', script: '''
           set -e
           . ${PY_ENV}/bin/activate
-          # Pillow might be missing in requirements.txt -> install quietly if needed
           python3 - <<'PY'
 import os, base64, xml.etree.ElementTree as ET
 from io import BytesIO
+
+# Try Pillow for thumbnail; if not present, just skip image.
 try:
     from PIL import Image, ImageDraw, ImageFont
     PIL_OK = True
 except Exception:
     PIL_OK = False
 
-p = os.path.join('${ROBOT_DIR}', 'output.xml')
-total = passed = failed = 0
-rate = '0.0%'
-elapsed = 'n/a'
+out_dir = os.path.join(os.getcwd(), "${ROBOT_DIR}")
+xml_path = os.path.join(out_dir, "output.xml")
 
-if os.path.exists(p):
-    r = ET.parse(p).getroot()
-    tests = r.findall('.//test')
+total = passed = failed = 0
+rate = "0.0%"
+elapsed = "n/a"
+
+if os.path.exists(xml_path):
+    root = ET.parse(xml_path).getroot()
+    tests = root.findall(".//test")
     total = len(tests)
-    passed = sum(1 for t in tests if (t.find('status') is not None and t.find('status').attrib.get('status')=='PASS'))
+    passed = sum(1 for t in tests if (t.find("status") is not None and t.find("status").attrib.get("status") == "PASS"))
     failed = total - passed
-    ms = r.attrib.get('elapsedtime')
+    ms = root.attrib.get("elapsedtime")
     if ms:
         s = float(ms) / 1000.0
         mm = int(s // 60); ss = int(round(s - mm*60))
-        elapsed = f'{mm:02d}:{ss:02d}'
-    rate = f'{(passed/total*100):.1f}%' if total else '0.0%'
+        elapsed = f"{mm:02d}:{ss:02d}"
+    rate = f"{(passed/total*100):.1f}%" if total else "0.0%"
 
-print(f"ROBOT_TOTAL={total}")
-print(f"ROBOT_PASS={passed}")
-print(f"ROBOT_FAIL={failed}")
-print(f"ROBOT_RATE={rate}")
-print(f"ROBOT_ELAPSED={elapsed}")
+print("ROBOT_TOTAL=" + str(total))
+print("ROBOT_PASS=" + str(passed))
+print("ROBOT_FAIL=" + str(failed))
+print("ROBOT_RATE=" + rate)
+print("ROBOT_ELAPSED=" + elapsed)
 
-b64 = ''
+b64 = ""
 if PIL_OK:
-    # simple thumbnail similar to the report header
     W, H = 900, 220
-    img = Image.new('RGB', (W, H), 'white')
+    img_dir = out_dir
+    img_path = os.path.join(img_dir, "summary.png")
+
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (W, H), "white")
     d = ImageDraw.Draw(img)
-    def f(name, size):
+
+    def font(name, size):
         try: return ImageFont.truetype(name, size)
         except: return ImageFont.load_default()
-    f_head = f('DejaVuSans-Bold.ttf', 20)
-    f_lab  = f('DejaVuSans.ttf', 12)
-    f_num  = f('DejaVuSans-Bold.ttf', 26)
-    # green status bar
+
+    f_head = font("DejaVuSans-Bold.ttf", 20)
+    f_lab  = font("DejaVuSans.ttf", 12)
+    f_num  = font("DejaVuSans-Bold.ttf", 26)
+
+    # green header
     d.rectangle((0,0,W,44), fill=(34,197,94))
-    d.text((14,10), 'Robot Report – summary', fill='white', font=f_head)
-    # KPI tiles
-    labels = ['Total','Passed','Failed','Pass rate','Duration']
-    values = [str(total), str(passed), str(failed), rate, '${"$"}{${"}"}ROBOT_ELAPSED_PLACEHOLDER']  # placeholder replaced below
-    values[-1] = elapsed
+    d.text((14,10), "Robot Report – summary", fill="white", font=f_head)
+
+    labels = ["Total","Passed","Failed","Pass rate","Duration"]
+    values = [str(total), str(passed), str(failed), rate, elapsed]
+
     x = 14
     for i in range(5):
         d.rounded_rectangle((x,64,x+168,140), radius=10, fill=(249,250,251), outline=(238,242,247))
         d.text((x+12,72), labels[i], fill=(107,114,128), font=f_lab)
         d.text((x+12,96), values[i], fill=(17,24,39), font=f_num)
         x += 176
-    # save to file & base64
-    out_path = os.path.join('${ROBOT_DIR}', 'summary.png')
-    img.save(out_path, 'PNG')
-    with open(out_path, 'rb') as fh:
-        b64 = base64.b64encode(fh.read()).decode('ascii')
+
+    img.save(img_path, "PNG")
+    with open(img_path, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode("ascii")
 
 print("REPORT_THUMB_B64=" + b64)
 PY
-        """).trim()
+        ''').trim()
 
-        // Put KEY=VAL pairs into env
+        // Load KEY=VAL pairs from Python
         parseOut.split("\n").each { ln ->
           int i = ln.indexOf("=")
-          if (i > 0) {
-            env[ln.substring(0,i)] = ln.substring(i+1)
-          }
+          if (i > 0) env[ln.substring(0,i)] = ln.substring(i+1)
         }
 
-        // Read back as locals for convenience
         def total    = env.ROBOT_TOTAL ?: '0'
         def passed   = env.ROBOT_PASS ?: '0'
         def failed   = env.ROBOT_FAIL ?: '0'
@@ -184,7 +188,6 @@ PY
 
         def subj = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Wikipedia - test report"
 
-        // -------- HTML mail (with inline Base64 image) --------
         def body = """
 <!doctype html>
 <html>
