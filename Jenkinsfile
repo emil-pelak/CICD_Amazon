@@ -75,18 +75,22 @@ pipeline {
   post {
     always {
       script {
-        // ---- Links (publisher view avoids CSP) ----
-        def reportUrl   = "${env.BUILD_URL}Robot_20Report/"
-        def consoleUrl  = "${env.BUILD_URL}console"
-        def zipUrl      = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
+        // ----- Links (publisher view avoids CSP) -----
+        def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
+        def consoleUrl = "${env.BUILD_URL}console"
+        def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // ---- Git metadata ----
-        def branch   = sh(script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} || git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+        // ----- Git metadata (works in detached HEAD) -----
+        def branch = sh(script: 'git branch --remote --contains HEAD | head -n1 | sed -E "s#^[[:space:]]*origin/##"', returnStdout: true).trim()
+        if (!branch) {
+          branch = sh(script: 'git rev-parse --abbrev-ref HEAD || echo origin/dev/main', returnStdout: true).trim()
+          if (branch == 'HEAD' || !branch) { branch = 'origin/dev/main' }
+        }
         def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-        def subject  = sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
+        def subject  = sh(script: 'git log -1 --pretty=%s',     returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>"', returnStdout: true).trim()
 
-        // ---- Parse Robot XML + optional thumbnail (Base64) ----
+        // ----- Parse Robot XML + optional thumbnail (NO writes to env) -----
         def parseOut = sh(returnStdout: true, label: 'Parse stats & build thumbnail', script: '''
           set -e
           . ${PY_ENV}/bin/activate
@@ -94,19 +98,19 @@ pipeline {
 import os, base64, xml.etree.ElementTree as ET
 from io import BytesIO
 
-# Try Pillow for thumbnail; if not present, just skip image.
+# Optional thumbnail
 try:
     from PIL import Image, ImageDraw, ImageFont
     PIL_OK = True
 except Exception:
     PIL_OK = False
 
-out_dir = os.path.join(os.getcwd(), "${ROBOT_DIR}")
+out_dir = os.path.join(os.getcwd(), os.environ.get("ROBOT_DIR","robot_reports"))
 xml_path = os.path.join(out_dir, "output.xml")
 
-total = passed = failed = 0
-rate = "0.0%"
-elapsed = "n/a"
+total=passed=failed=0
+rate="0.0%"
+elapsed="n/a"
 
 if os.path.exists(xml_path):
     root = ET.parse(xml_path).getroot()
@@ -116,75 +120,61 @@ if os.path.exists(xml_path):
     failed = total - passed
     ms = root.attrib.get("elapsedtime")
     if ms:
-        s = float(ms) / 1000.0
-        mm = int(s // 60); ss = int(round(s - mm*60))
-        elapsed = f"{mm:02d}:{ss:02d}"
+        s = float(ms)/1000.0
+        mm=int(s//60); ss=int(round(s-mm*60))
+        elapsed=f"{mm:02d}:{ss:02d}"
     rate = f"{(passed/total*100):.1f}%" if total else "0.0%"
 
-print("ROBOT_TOTAL=" + str(total))
-print("ROBOT_PASS=" + str(passed))
-print("ROBOT_FAIL=" + str(failed))
-print("ROBOT_RATE=" + rate)
-print("ROBOT_ELAPSED=" + elapsed)
+print("ROBOT_TOTAL="+str(total))
+print("ROBOT_PASS="+str(passed))
+print("ROBOT_FAIL="+str(failed))
+print("ROBOT_RATE="+rate)
+print("ROBOT_ELAPSED="+elapsed)
 
-b64 = ""
+b64=""
 if PIL_OK:
-    W, H = 900, 220
-    img_dir = out_dir
-    img_path = os.path.join(img_dir, "summary.png")
-
+    W,H=900,220
     from PIL import Image, ImageDraw, ImageFont
-    img = Image.new("RGB", (W, H), "white")
-    d = ImageDraw.Draw(img)
-
-    def font(name, size):
-        try: return ImageFont.truetype(name, size)
+    img=Image.new("RGB",(W,H),"white"); d=ImageDraw.Draw(img)
+    def F(n,s):
+        try: return ImageFont.truetype(n,s)
         except: return ImageFont.load_default()
-
-    f_head = font("DejaVuSans-Bold.ttf", 20)
-    f_lab  = font("DejaVuSans.ttf", 12)
-    f_num  = font("DejaVuSans-Bold.ttf", 26)
-
-    # green header
+    fH=F("DejaVuSans-Bold.ttf",20); fL=F("DejaVuSans.ttf",12); fN=F("DejaVuSans-Bold.ttf",26)
     d.rectangle((0,0,W,44), fill=(34,197,94))
-    d.text((14,10), "Robot Report – summary", fill="white", font=f_head)
-
-    labels = ["Total","Passed","Failed","Pass rate","Duration"]
-    values = [str(total), str(passed), str(failed), rate, elapsed]
-
-    x = 14
+    d.text((14,10),"Robot Report – summary", fill="white", font=fH)
+    labels=["Total","Passed","Failed","Pass rate","Duration"]
+    values=[str(total),str(passed),str(failed),rate,elapsed]
+    x=14
     for i in range(5):
         d.rounded_rectangle((x,64,x+168,140), radius=10, fill=(249,250,251), outline=(238,242,247))
-        d.text((x+12,72), labels[i], fill=(107,114,128), font=f_lab)
-        d.text((x+12,96), values[i], fill=(17,24,39), font=f_num)
-        x += 176
-
-    img.save(img_path, "PNG")
-    with open(img_path, "rb") as fh:
-        b64 = base64.b64encode(fh.read()).decode("ascii")
-
-print("REPORT_THUMB_B64=" + b64)
+        d.text((x+12,72), labels[i], fill=(107,114,128), font=fL)
+        d.text((x+12,96), values[i], fill=(17,24,39), font=fN)
+        x+=176
+    p=os.path.join(out_dir,"summary.png"); img.save(p,"PNG")
+    with open(p,"rb") as fh: b64=base64.b64encode(fh.read()).decode("ascii")
+print("REPORT_THUMB_B64="+b64)
 PY
         ''').trim()
 
-        // Load KEY=VAL pairs from Python
-        parseOut.split("\n").each { ln ->
-          int i = ln.indexOf("=")
-          if (i > 0) env[ln.substring(0,i)] = ln.substring(i+1)
+        // Parse KEY=VAL pairs into a local map (sandbox-safe)
+        def kv = [:]
+        parseOut.split("\\r?\\n").each { ln ->
+          def i = ln.indexOf("=")
+          if (i > 0) kv[ln.substring(0,i)] = ln.substring(i+1)
         }
 
-        def total    = env.ROBOT_TOTAL ?: '0'
-        def passed   = env.ROBOT_PASS ?: '0'
-        def failed   = env.ROBOT_FAIL ?: '0'
-        def passRate = env.ROBOT_RATE ?: '0.0%'
-        def elapsed  = env.ROBOT_ELAPSED ?: 'n/a'
-        def thumbB64 = env.REPORT_THUMB_B64 ?: ''
+        def total    = kv.ROBOT_TOTAL ?: '0'
+        def passed   = kv.ROBOT_PASS ?: '0'
+        def failed   = kv.ROBOT_FAIL ?: '0'
+        def passRate = kv.ROBOT_RATE ?: '0.0%'
+        def elapsed  = kv.ROBOT_ELAPSED ?: 'n/a'
+        def thumbB64 = kv.REPORT_THUMB_B64 ?: ''
 
         def buildStatus = currentBuild.result ?: 'SUCCESS'
-        def statusBg = (buildStatus == 'SUCCESS') ? "#16a34a" : "#dc2626"
-        def statusIcon = (buildStatus == 'SUCCESS') ? "✅" : "❌"
-        def nodeName = env.NODE_NAME ?: 'built-in'
-        def browser  = "Chrome (headless=${env.HEADLESS})"
+        def statusBg    = (buildStatus == 'SUCCESS') ? "#16a34a" : "#dc2626"
+        def statusIcon  = (buildStatus == 'SUCCESS') ? "✅" : "❌"
+        def nodeName    = env.NODE_NAME ?: 'built-in'
+        def browser     = "Chrome (headless=${env.HEADLESS})"
 
         def subj = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Wikipedia - test report"
 
