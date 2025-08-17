@@ -173,10 +173,10 @@ PY
         try { double t = total as double; double p = passed as double; passRate = t>0 ? String.format("%.1f%%",(p*100.0)/t) : "0.0%"; } catch (ignored) {}
 
         // Snapshot inline (data URI)
-        def imgTag = ""
+        def imgTag = ''
         if (fileExists("${ROBOT_DIR}/report_snapshot.b64")) {
           def b64 = readFile("${ROBOT_DIR}/report_snapshot.b64").trim()
-          imgTag = "<img class=\\"thumb\\" src=\\"data:image/png;base64,${b64}\\" alt=\\"Robot report snapshot\\"/>"
+          imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
         }
 
         // Status UI
