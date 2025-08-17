@@ -4,9 +4,12 @@ pipeline {
   environment {
     ROBOT_DIR  = "robot_reports"
     PY_ENV     = "venv"
-    HEADLESS   = "true"                   // run headless on Jenkins
+    HEADLESS   = "true"                 // run headless on Jenkins agents
     EMAIL_FROM = "emil-pelak@wp.pl"
     EMAIL_TO   = "emil-pelak@outlook.com"
+    // Optional: total size limit for attachments (only small HTML files).
+    // Big files (screenshots) are never attached to email — they stay in ZIP.
+    EMAIL_ATTACH_LIMIT_MB = "5"
   }
 
   stages {
@@ -57,8 +60,9 @@ pipeline {
     stage('Publish report') {
       steps {
         sh '''
+          # ZIP zawiera CAŁY katalog robot_reports/ (łącznie ze screenshotami)
           cd ${ROBOT_DIR}
-          zip -qr ../${ROBOT_DIR}.zip .
+          zip -9qr ../${ROBOT_DIR}.zip .
         '''
         publishHTML(target: [
           allowMissing: false,
@@ -75,187 +79,123 @@ pipeline {
   post {
     always {
       script {
-        // ----- Links (publisher view avoids CSP) -----
+        // --- Stable links (Publisher view avoids CSP) ---
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
-        def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
+        def zipUrl     = "${env.BUILD_URL}artifact/${env.ROBOT_DIR}.zip"
 
-        // ----- Git metadata (works in detached HEAD) -----
+        // --- Git metadata (works in detached HEAD) ---
         def branch = sh(script: 'git branch --remote --contains HEAD | head -n1 | sed -E "s#^[[:space:]]*origin/##"', returnStdout: true).trim()
-        if (!branch) {
-          branch = sh(script: 'git rev-parse --abbrev-ref HEAD || echo origin/dev/main', returnStdout: true).trim()
-          if (branch == 'HEAD' || !branch) { branch = 'origin/dev/main' }
-        }
+        if (!branch || branch == 'HEAD') { branch = 'dev/main' }
         def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-        def subject  = sh(script: 'git log -1 --pretty=%s',     returnStdout: true).trim()
+        def subject  = sh(script: 'git log -1 --pretty=%s', returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>"', returnStdout: true).trim()
 
-        // ----- Parse Robot XML + optional thumbnail (NO writes to env) -----
-        def parseOut = sh(returnStdout: true, label: 'Parse stats & build thumbnail', script: '''
-          set -e
-          . ${PY_ENV}/bin/activate
-          python3 - <<'PY'
-import os, base64, xml.etree.ElementTree as ET
-from io import BytesIO
+        // --- KPIs from Robot output.xml ---
+        def total='0', passed='0', failed='0', elapsed='n/a'
+        try {
+          def xml = new XmlSlurper().parse(new File("${env.WORKSPACE}/${env.ROBOT_DIR}/output.xml"))
+          def tests = xml.depthFirst().findAll { it.name() == 'test' }
+          total  = tests.size().toString()
+          passed = tests.count { it.status.@status.text() == 'PASS' }.toString()
+          failed = ((total as int) - (passed as int)).toString()
+          def ms = (xml.@elapsedtime?.toString() ?: '')
+          if (ms) {
+            long s = (ms as long) / 1000L
+            elapsed = String.format("%02d:%02d", (int)(s/60), (int)(s%60))
+          }
+        } catch (ignored) {}
 
-# Optional thumbnail
-try:
-    from PIL import Image, ImageDraw, ImageFont
-    PIL_OK = True
-except Exception:
-    PIL_OK = False
-
-out_dir = os.path.join(os.getcwd(), os.environ.get("ROBOT_DIR","robot_reports"))
-xml_path = os.path.join(out_dir, "output.xml")
-
-total=passed=failed=0
-rate="0.0%"
-elapsed="n/a"
-
-if os.path.exists(xml_path):
-    root = ET.parse(xml_path).getroot()
-    tests = root.findall(".//test")
-    total = len(tests)
-    passed = sum(1 for t in tests if (t.find("status") is not None and t.find("status").attrib.get("status") == "PASS"))
-    failed = total - passed
-    ms = root.attrib.get("elapsedtime")
-    if ms:
-        s = float(ms)/1000.0
-        mm=int(s//60); ss=int(round(s-mm*60))
-        elapsed=f"{mm:02d}:{ss:02d}"
-    rate = f"{(passed/total*100):.1f}%" if total else "0.0%"
-
-print("ROBOT_TOTAL="+str(total))
-print("ROBOT_PASS="+str(passed))
-print("ROBOT_FAIL="+str(failed))
-print("ROBOT_RATE="+rate)
-print("ROBOT_ELAPSED="+elapsed)
-
-b64=""
-if PIL_OK:
-    W,H=900,220
-    from PIL import Image, ImageDraw, ImageFont
-    img=Image.new("RGB",(W,H),"white"); d=ImageDraw.Draw(img)
-    def F(n,s):
-        try: return ImageFont.truetype(n,s)
-        except: return ImageFont.load_default()
-    fH=F("DejaVuSans-Bold.ttf",20); fL=F("DejaVuSans.ttf",12); fN=F("DejaVuSans-Bold.ttf",26)
-    d.rectangle((0,0,W,44), fill=(34,197,94))
-    d.text((14,10),"Robot Report – summary", fill="white", font=fH)
-    labels=["Total","Passed","Failed","Pass rate","Duration"]
-    values=[str(total),str(passed),str(failed),rate,elapsed]
-    x=14
-    for i in range(5):
-        d.rounded_rectangle((x,64,x+168,140), radius=10, fill=(249,250,251), outline=(238,242,247))
-        d.text((x+12,72), labels[i], fill=(107,114,128), font=fL)
-        d.text((x+12,96), values[i], fill=(17,24,39), font=fN)
-        x+=176
-    p=os.path.join(out_dir,"summary.png"); img.save(p,"PNG")
-    with open(p,"rb") as fh: b64=base64.b64encode(fh.read()).decode("ascii")
-print("REPORT_THUMB_B64="+b64)
-PY
-        ''').trim()
-
-        // Parse KEY=VAL pairs into a local map (sandbox-safe)
-        def kv = [:]
-        parseOut.split("\\r?\\n").each { ln ->
-          def i = ln.indexOf("=")
-          if (i > 0) kv[ln.substring(0,i)] = ln.substring(i+1)
-        }
-
-        def total    = kv.ROBOT_TOTAL ?: '0'
-        def passed   = kv.ROBOT_PASS ?: '0'
-        def failed   = kv.ROBOT_FAIL ?: '0'
-        def passRate = kv.ROBOT_RATE ?: '0.0%'
-        def elapsed  = kv.ROBOT_ELAPSED ?: 'n/a'
-        def thumbB64 = kv.REPORT_THUMB_B64 ?: ''
-
+        def passRate = (total as Integer) ? String.format("%.1f%%", (passed as Double)*100D/(total as Double)) : "0.0%"
         def buildStatus = currentBuild.result ?: 'SUCCESS'
         def statusBg    = (buildStatus == 'SUCCESS') ? "#16a34a" : "#dc2626"
         def statusIcon  = (buildStatus == 'SUCCESS') ? "✅" : "❌"
         def nodeName    = env.NODE_NAME ?: 'built-in'
         def browser     = "Chrome (headless=${env.HEADLESS})"
 
-        def subj = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Wikipedia - test report"
+        // --- Conditional small attachments (never screenshots) ---
+        long limitBytes = ((env.EMAIL_ATTACH_LIMIT_MB ?: '5') as long) * 1024L * 1024L
+        def candidates  = ["${env.ROBOT_DIR}/report.html", "${env.ROBOT_DIR}/log.html"] // small only
+        def toAttach    = []
+        long used       = 0L
+        for (p in candidates) {
+          if (fileExists(p)) {
+            long sz = (sh(returnStdout: true, script: "wc -c < '${p}'").trim() as long)
+            if (used + sz <= limitBytes) {
+              toAttach << p
+              used += sz
+            }
+          }
+        }
+        def attachNote = toAttach ? "Attached: " + toAttach.collect{ it.tokenize('/').last() }.join(', ') + " (≤ ${(limitBytes/1024/1024) as int} MB)"
+                                  : "Attachments omitted due to size – use links below (ZIP contains screenshots)."
 
+        // --- Email content (English) ---
+        def subj = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Wikipedia - test report"
         def body = """
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8"/>
+<!doctype html><html><head><meta charset="utf-8"/>
 <title>${subj}</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
-  .card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; max-width:900px; margin:auto; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06) }
-  .status { background:${statusBg}; color:#fff; padding:16px 20px; font-size:18px; font-weight:700 }
-  .sub { color:#e5e7eb; font-weight:500 }
-  .grid { display:grid; grid-template-columns: repeat(5, minmax(120px,1fr)); gap:12px; padding:16px 20px 8px 20px }
-  .kpi { background:#f9fafb; border:1px solid #eef2f7; border-radius:12px; padding:12px; text-align:center }
-  .kpi .label { font-size:12px; color:#6b7280; display:block }
-  .kpi .val   { font-size:22px; font-weight:800; margin-top:2px }
-  .section { padding:0 20px 16px 20px }
-  .h { font-weight:700; margin:8px 0 10px 0; color:#111827 }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#f3f4f6; padding:2px 6px; border-radius:6px }
-  .btns { padding:0 20px 20px 20px }
-  a.btn { display:inline-block; margin-right:10px; margin-top:10px; padding:10px 14px; border-radius:10px; text-decoration:none; color:#fff }
-  a.primary   { background:#111827 }
-  a.secondary { background:#374151 }
-  a.zip       { background:#0ea5e9 }
-  .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
-  .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
-  .muted { color:#6b7280; font-size:12px }
-  img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <div class="status">${statusIcon} ${buildStatus} <span class="sub">• ${env.JOB_NAME}</span> <span class="sub">• Build #${env.BUILD_NUMBER}</span></div>
+ body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f8fafc;padding:20px}
+ .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;max-width:900px;margin:auto;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+ .status{background:${statusBg};color:#fff;padding:16px 20px;font-size:18px;font-weight:700}
+ .sub{color:#e5e7eb;font-weight:500}
+ .grid{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:12px;padding:16px 20px 8px}
+ .kpi{background:#f9fafb;border:1px solid #eef2f7;border-radius:12px;padding:12px;text-align:center}
+ .kpi .label{font-size:12px;color:#6b7280;display:block}
+ .kpi .val{font-size:22px;font-weight:800;margin-top:2px}
+ .section{padding:0 20px 16px}
+ .h{font-weight:700;margin:8px 0 10px;color:#111827}
+ .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f3f4f6;padding:2px 6px;border-radius:6px}
+ .btns{padding:0 20px 20px}
+ a.btn{display:inline-block;margin-right:10px;margin-top:10px;padding:10px 14px;border-radius:10px;text-decoration:none;color:#fff}
+ a.primary{background:#111827} a.secondary{background:#374151} a.zip{background:#0ea5e9}
+ .muted{color:#6b7280;font-size:12px}
+</style></head><body>
+<div class="card">
+  <div class="status">${statusIcon} ${buildStatus} <span class="sub">• ${env.JOB_NAME}</span> <span class="sub">• Build #${env.BUILD_NUMBER}</span></div>
 
-    ${thumbB64 ? "<div class='section'><img class='thumb' alt='Robot report summary' src='data:image/png;base64,"+thumbB64+"' /></div>" : ""}
-
-    <div class="grid">
-      <div class="kpi"><span class="label">Total</span><span class="val">${total}</span></div>
-      <div class="kpi"><span class="label">Passed</span><span class="val">${passed}</span></div>
-      <div class="kpi"><span class="label">Failed</span><span class="val">${failed}</span></div>
-      <div class="kpi"><span class="label">Pass rate</span><span class="val">${passRate}</span></div>
-      <div class="kpi"><span class="label">Duration (mm:ss)</span><span class="val">${elapsed}</span></div>
-    </div>
-
-    <div class="section meta">
-      <div class="box">
-        <div class="h">Commit</div>
-        <div><b>Branch:</b> <span class="mono">${branch}</span></div>
-        <div><b>SHA:</b> <span class="mono">${shortSha}</span></div>
-        <div><b>Message:</b> ${subject}</div>
-        <div><b>Author:</b> ${author}</div>
-      </div>
-      <div class="box">
-        <div class="h">Execution</div>
-        <div><b>Node:</b> ${nodeName}</div>
-        <div><b>Browser:</b> ${browser}</div>
-      </div>
-    </div>
-
-    <div class="btns">
-      <a class="btn primary"   href="${reportUrl}"  target="_blank">🔎 Open “Wikipedia - test report”</a>
-      <a class="btn secondary" href="${consoleUrl}" target="_blank">🖥 Console Output</a>
-      <a class="btn zip"       href="${zipUrl}"     target="_blank">📦 Download results (ZIP)</a>
-    </div>
-
-    <div class="section muted">If Chrome blocks direct HTML artifacts due to CSP, use the “Robot Report” link above (publisher view).</div>
+  <div class="grid">
+    <div class="kpi"><span class="label">Total</span><span class="val">${total}</span></div>
+    <div class="kpi"><span class="label">Passed</span><span class="val">${passed}</span></div>
+    <div class="kpi"><span class="label">Failed</span><span class="val">${failed}</span></div>
+    <div class="kpi"><span class="label">Pass rate</span><span class="val">${passRate}</span></div>
+    <div class="kpi"><span class="label">Duration (mm:ss)</span><span class="val">${elapsed}</span></div>
   </div>
-</body>
-</html>
+
+  <div class="section">
+    <div class="h">Commit</div>
+    <div><b>Branch:</b> <span class="mono">${branch}</span></div>
+    <div><b>SHA:</b> <span class="mono">${shortSha}</span></div>
+    <div><b>Message:</b> ${subject}</div>
+    <div><b>Author:</b> ${author}</div>
+  </div>
+
+  <div class="section">
+    <div class="h">Execution</div>
+    <div><b>Node:</b> ${nodeName}</div>
+    <div><b>Browser:</b> ${browser}</div>
+    <div class="muted" style="margin-top:6px">${attachNote}</div>
+  </div>
+
+  <div class="btns">
+    <a class="btn primary"   href="${reportUrl}"  target="_blank">🔎 Open “Wikipedia - test report”</a>
+    <a class="btn secondary" href="${consoleUrl}" target="_blank">🖥 Console Output</a>
+    <a class="btn zip"       href="${zipUrl}"     target="_blank">📦 Download results (ZIP)</a>
+  </div>
+
+  <div class="section muted">If Chrome blocks direct HTML artifacts due to CSP, use the “Robot Report” link above (publisher view).</div>
+</div>
+</body></html>
 """
         emailext(
           subject:  subj,
           from:     env.EMAIL_FROM,
           to:       env.EMAIL_TO,
-          body:     body,
           mimeType: 'text/html',
-          attachmentsPattern: 'robot_reports/report.html, robot_reports/log.html, robot_reports.zip'
+          body:     body,
+          attachmentsPattern: toAttach.join(', ')
         )
-
         echo "Pipeline finished: ${currentBuild.currentResult}"
       }
     }
