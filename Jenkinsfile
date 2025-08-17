@@ -63,7 +63,6 @@ pipeline {
           HTML="$(readlink -f ${ROBOT_DIR}/report.html)"
           SNAP="${ROBOT_DIR}/report_snapshot.png"
 
-          # Try Chrome/Chromium headless to grab a snapshot of report.html
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
@@ -78,7 +77,6 @@ pipeline {
             echo "⚠️  Could not create report snapshot (no Chrome/Chromium)."
           fi
 
-          # Zip everything from robot_reports (includes all screenshots)
           ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . )
         '''
       }
@@ -101,12 +99,12 @@ pipeline {
   post {
     always {
       script {
-        // ---------- Links ----------
+        // ----- Links -----
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // ---------- Git meta (with safe fallbacks) ----------
+        // ----- Git meta (safe fallbacks) -----
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
@@ -115,7 +113,7 @@ pipeline {
         def subject  = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>" 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // ---------- KPIs from output.xml (pure Groovy) ----------
+        // ----- KPIs from output.xml -----
         def total='0', passed='0', failed='0', elapsed='n/a', startTime='-', endTime='-'
         try {
           def xml = new XmlSlurper().parse(new File("${env.WORKSPACE}/${ROBOT_DIR}/output.xml"))
@@ -137,14 +135,31 @@ pipeline {
           echo "WARN: Failed to parse output.xml: ${e}"
         }
 
-        def passRate = "0.0%"
-        try {
-          double t = (total as double)
-          double p = (passed as double)
-          passRate = t > 0 ? String.format("%.1f%%", (p*100.0)/t) : "0.0%"
-        } catch (ignored) {}
+        // ----- Decide what to render -----
+        boolean hasStats  = !((total == '0' && passed == '0' && failed == '0') || total == null)
+        boolean hasTiming = !((elapsed == 'n/a' || elapsed == null) && (startTime == '-' && endTime == '-'))
 
-        // ---------- Inline snapshot (Base64) ----------
+        String kpiSection = hasStats ? """
+    <div class="grid">
+      <div class="kpi"><span class="label">Total</span><span class="val">${total}</span></div>
+      <div class="kpi"><span class="label">Passed</span><span class="val">${passed}</span></div>
+      <div class="kpi"><span class="label">Failed</span><span class="val">${failed}</span></div>
+      <div class="kpi"><span class="label">Pass rate</span><span class="val">${(total as Double) > 0 ? String.format("%.1f%%", (passed as Double)*100.0/(total as Double)) : "—"}</span></div>
+      <div class="kpi"><span class="label">Duration (mm:ss)</span><span class="val">${elapsed}</span></div>
+    </div>
+""" : ""
+
+        String execSection = hasTiming ? """
+    <div class="section">
+      <div class="h">Execution</div>
+      <div><b>Start:</b> ${startTime}</div>
+      <div><b>End:</b> ${endTime}</div>
+      <div><b>Node:</b> ${env.NODE_NAME ?: 'built-in'}</div>
+      <div><b>Browser:</b> Chrome (headless=${env.HEADLESS})</div>
+    </div>
+""" : ""
+
+        // ----- Inline snapshot -----
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(shot)) {
@@ -152,12 +167,10 @@ pipeline {
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
         }
 
-        // ---------- Email look & content ----------
+        // ----- Email -----
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
-        String browserInfo = "Chrome (headless=${env.HEADLESS})"
-        String nodeName    = env.NODE_NAME ?: 'built-in'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Wikipedia - test report"
 
         String body = """
@@ -192,13 +205,8 @@ pipeline {
   <div class="card">
     <div class="status">${statusIcon} ${buildStatus} <span class="sub">• ${env.JOB_NAME}</span> <span class="sub">• Build #${env.BUILD_NUMBER}</span></div>
 
-    <div class="grid">
-      <div class="kpi"><span class="label">Total</span><span class="val">${total}</span></div>
-      <div class="kpi"><span class="label">Passed</span><span class="val">${passed}</span></div>
-      <div class="kpi"><span class="label">Failed</span><span class="val">${failed}</span></div>
-      <div class="kpi"><span class="label">Pass rate</span><span class="val">${passRate}</span></div>
-      <div class="kpi"><span class="label">Duration (mm:ss)</span><span class="val">${elapsed}</span></div>
-    </div>
+    <!-- KPIs (shown only when available) -->
+    ${kpiSection}
 
     <div class="section">
       <div class="h">Commit</div>
@@ -208,13 +216,8 @@ pipeline {
       <div><b>Author:</b> ${author}</div>
     </div>
 
-    <div class="section">
-      <div class="h">Execution</div>
-      <div><b>Start:</b> ${startTime}</div>
-      <div><b>End:</b> ${endTime}</div>
-      <div><b>Node:</b> ${nodeName}</div>
-      <div><b>Browser:</b> ${browserInfo}</div>
-    </div>
+    <!-- Execution (shown only when timing is available) -->
+    ${execSection}
 
     <div class="btns">
       <a class="btn primary"   href="${reportUrl}"  target="_blank">🔎 Open “Wikipedia - test report”</a>
@@ -229,7 +232,7 @@ pipeline {
 </html>
 """
 
-        // ---------- Attach ZIP only if small enough ----------
+        // Attach ZIP if small enough
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
@@ -242,22 +245,11 @@ pipeline {
         }
 
         if (attachZip) {
-          emailext(
-            subject:  subj,
-            from:     env.EMAIL_FROM,
-            to:       env.EMAIL_TO,
-            body:     body,
-            mimeType: 'text/html',
-            attachmentsPattern: zipPath
-          )
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
         } else {
-          emailext(
-            subject:  subj,
-            from:     env.EMAIL_FROM,
-            to:       env.EMAIL_TO,
-            body:     body,
-            mimeType: 'text/html'
-          )
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html')
         }
 
         echo "Pipeline finished: ${currentBuild.currentResult}"
