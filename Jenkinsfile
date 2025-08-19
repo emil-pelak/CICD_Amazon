@@ -106,8 +106,8 @@ pipeline {
           returnStdout: true
         ).trim().replaceFirst(/^origin\\//,'')
         def shortSha = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
-        def subject  = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
-        def author   = sh(script: 'git log -1 --pretty="%an <%ae>" 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def author      = sh(script: 'git log -1 --pretty="%an" 2>/dev/null || echo "-"', returnStdout: true).trim()
 
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
@@ -135,7 +135,7 @@ pipeline {
   .status { background:${statusColor}; color:#fff; padding:16px 20px; font-size:18px; font-weight:700 }
   .sub { color:#e5e7eb; font-weight:500 }
   .section { padding:0 20px 16px 20px }
-  .h { font-weight:700; margin:8px 0 10px 0; color:#111827 }
+  .h { display:flex; align-items:center; gap:8px; font-weight:800; margin:8px 0 10px 0; color:#111827 }
   .btns { padding:0 20px 20px 20px }
   a.btn { display:inline-block; margin-right:10px; margin-top:10px; padding:10px 14px; border-radius:10px; text-decoration:none; color:#fff }
   a.primary   { background:#111827 }
@@ -143,15 +143,17 @@ pipeline {
   a.zip       { background:#0ea5e9 }
   img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
 
-  /* Ładniejsze "chipsy" dla Gita */
+  /* Commit meta */
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
-  .row  { margin:6px 0 }
-  .label{ color:#6b7280; font-size:12px; margin-right:6px }
-  .chip { display:inline-block; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
+  .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+  .label{ color:#6b7280; font-size:12px }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
   .chip.branch { background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a }
   .chip.sha    { background:#ecfeff; border-color:#cffafe; color:#155e75 }
-  .msg  { font-weight:600; color:#111827 }
+
+  .ic { width:18px; height:18px; vertical-align:middle }
+  .title { font-weight:700; color:#111827 }
   .author { color:#111827 }
 </style>
 </head>
@@ -160,15 +162,49 @@ pipeline {
     <div class="status">${statusIcon} ${buildStatus} <span class="sub">• ${env.JOB_NAME}</span> <span class="sub">• Build #${env.BUILD_NUMBER}</span></div>
 
     <div class="section">
-      <div class="h">Commit</div>
+      <div class="h">
+        <!-- Git logo (inline SVG) -->
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="5" width="14" height="14" rx="3" ry="3" fill="#f1502f" transform="rotate(45 12 12)"></rect>
+          <circle cx="10" cy="10" r="1.8" fill="white"></circle>
+          <circle cx="14" cy="14" r="1.8" fill="white"></circle>
+          <circle cx="14" cy="10" r="1.8" fill="white"></circle>
+          <path d="M10 10 L14 14 M10 10 L14 10" stroke="white" stroke-width="1.6" fill="none"></path>
+        </svg>
+        <span>Commit</span>
+      </div>
+
       <div class="meta">
         <div class="box">
-          <div class="row"><span class="label">Branch</span> <span class="chip branch">${branch}</span></div>
-          <div class="row"><span class="label">SHA</span>    <span class="chip sha">${shortSha}</span></div>
+          <div class="row">
+            <span class="label">
+              <!-- Branch icon -->
+              <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="6" cy="6" r="2.2" fill="#1e3a8a"></circle>
+                <circle cx="18" cy="6" r="2.2" fill="#1e3a8a"></circle>
+                <circle cx="18" cy="18" r="2.2" fill="#1e3a8a"></circle>
+                <path d="M6 8 v6 a4 4 0 0 0 4 4 h6" stroke="#1e3a8a" stroke-width="2" fill="none"></path>
+              </svg>
+              Branch
+            </span>
+            <span class="chip branch">${branch}</span>
+          </div>
+
+          <div class="row">
+            <span class="label">
+              <!-- Hash icon -->
+              <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 3 L7 21 M17 3 L15 21 M4 9 H20 M3 15 H19" stroke="#155e75" stroke-width="2" fill="none" stroke-linecap="round"></path>
+              </svg>
+              SHA
+            </span>
+            <span class="chip sha">${shortSha}</span>
+          </div>
         </div>
+
         <div class="box">
-          <div class="row msg">${subject}</div>
-          <div class="row author">${author}</div>
+          <div class="row"><span class="label">Commit title:</span> <span class="title">${commitTitle}</span></div>
+          <div class="row"><span class="label">Author:</span> <span class="author">${author}</span></div>
         </div>
       </div>
     </div>
