@@ -61,19 +61,35 @@ pipeline {
         sh '''
           set -e
           HTML="$(readlink -f ${ROBOT_DIR}/report.html)"
-          SNAP="${ROBOT_DIR}/report_snapshot.png"
+
+          # unikalna nazwa pliku + usuń stare snapshoty
+          SNAP="${ROBOT_DIR}/report_snapshot_${BUILD_NUMBER}.png"
+          rm -f "${ROBOT_DIR}"/report_snapshot_*.png || true
+
+          # poczekaj aż report.html przestanie się zmieniać
+          for i in $(seq 1 30); do
+            S1=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
+            sleep 0.3
+            S2=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
+            if [ "$S1" = "$S2" ] && [ "$S2" -gt 0 ]; then break; fi
+          done
 
           okshot=0
-          for B in google-chrome google-chrome-stable chromium chromium-browser; do
+          for B in google-chrome-stable google-chrome chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
               "$B" --headless=new --disable-gpu --no-sandbox \
+                  --user-data-dir="/tmp/snap-${BUILD_TAG}" \
+                  --disk-cache-size=1 \
                   --window-size=1600,1000 \
                   --screenshot="${SNAP}" "file://${HTML}" && okshot=1 && break
             fi
           done
+
           if [ "$okshot" -eq 1 ]; then
+            echo "SNAPSHOT_WRITTEN=${SNAP}" > .snapshot_env
             echo "✅ Report snapshot created at ${SNAP}"
           else
+            : > .snapshot_env
             echo "⚠️  Could not create report snapshot (no Chrome/Chromium)."
           fi
 
@@ -108,7 +124,7 @@ pipeline {
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
-        ).trim().replaceFirst(/^origin\\//,'')
+        ).trim().replaceFirst(/^origin\//,'')
         def shortSha = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def subject  = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>" 2>/dev/null || echo "-"', returnStdout: true).trim()
@@ -159,12 +175,22 @@ pipeline {
     </div>
 """ : ""
 
-        // ----- Inline snapshot -----
+        // ----- read snapshot path created in stage -----
+        if (fileExists('.snapshot_env')) {
+          def txt = readFile('.snapshot_env').trim()
+          if (txt?.startsWith('SNAPSHOT_WRITTEN=')) {
+            env.SNAPSHOT_FILE = txt.split('=')[1]
+          }
+        }
+
+        // ----- Inline snapshot (unique filename per build) -----
         def imgTag = ''
-        def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
+        def shot   = env.SNAPSHOT_FILE ?: "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot_${env.BUILD_NUMBER}.png"
         if (fileExists(shot)) {
           def b64 = sh(script: "base64 -w0 '${shot}'", returnStdout: true).trim()
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
+        } else {
+          imgTag = '<div style="padding:12px;border:1px dashed #ccc;border-radius:8px">Snapshot unavailable</div>'
         }
 
         // ----- Email -----
