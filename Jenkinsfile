@@ -12,7 +12,7 @@ pipeline {
 
   options {
     timestamps()
-    ansiColor('xterm')
+    // ansiColor('xterm')  // <- włącz dopiero po zainstalowaniu pluginu AnsiColor
   }
 
   stages {
@@ -43,7 +43,7 @@ pipeline {
 
     stage('Run tests') {
       steps {
-        // do not stop pipeline on test failures
+        // testy mogą się wyłożyć – ale pipeline ma iść dalej
         catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
           sh '''
             set -e
@@ -65,7 +65,6 @@ pipeline {
     }
 
     stage('Make snapshot & package') {
-      // wykona się nawet po FAIL dzięki catchError powyżej
       steps {
         sh '''
           set -e
@@ -136,7 +135,7 @@ pipeline {
         def commitMsg = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author    = sh(script: 'git log -1 --pretty="%an <%ae>" 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Fallback snapshot if stage was skipped or failed
+        // Fallback snapshot, gdyby stage był pominięty
         def shotPath = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (!fileExists(shotPath) && fileExists("${env.WORKSPACE}/${ROBOT_DIR}/report.html")) {
           sh '''
@@ -152,7 +151,7 @@ pipeline {
           '''
         }
 
-        // KPIs parsed with Python (no ScriptApproval)
+        // KPI: Python (bez Script Approval)
         sh '''
           set -e
           OUT="${ROBOT_DIR}/output.xml"
@@ -187,10 +186,7 @@ PY
         if (fileExists("${ROBOT_DIR}/metrics.env")) {
           def lines = readFile("${ROBOT_DIR}/metrics.env").trim().split("\\n")
           def M = [:]
-          lines.each { l ->
-            def kv = l.tokenize('=')
-            if (kv.size()==2) M[kv[0]] = kv[1]
-          }
+          lines.each { l -> def kv = l.tokenize('='); if (kv.size()==2) M[kv[0]] = kv[1] }
           total   = M['TOTAL']   ?: '0'
           passed  = M['PASSED']  ?: '0'
           failed  = M['FAILED']  ?: '0'
@@ -218,14 +214,12 @@ PY
     </div>
 """ : ""
 
-        // Inline snapshot (or placeholder)
         def imgTag = '<div class="placeholder">Snapshot unavailable</div>'
         if (fileExists(shotPath)) {
           def b64 = sh(script: "base64 -w0 '${shotPath}'", returnStdout: true).trim()
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
         }
 
-        // Email
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
@@ -287,7 +281,6 @@ PY
 </html>
 """
 
-        // Attach ZIP only if size <= MAX_ATTACH_MB
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
