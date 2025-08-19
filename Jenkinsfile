@@ -28,8 +28,8 @@ pipeline {
       steps {
         sh '''
           set -e
-          python3 -m venv ${PY_ENV} || true
-          . ${PY_ENV}/bin/activate
+          python3 -m venv "${PY_ENV}" || true
+          . "${PY_ENV}/bin/activate"
           pip install --upgrade pip wheel
           pip install -r requirements.txt
         '''
@@ -43,11 +43,11 @@ pipeline {
           echo "🧹 Cleaning old /tmp/robot-* profiles"
           find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
-          . ${PY_ENV}/bin/activate
-          mkdir -p ${ROBOT_DIR}
+          . "${PY_ENV}/bin/activate"
+          mkdir -p "${ROBOT_DIR}"
 
           robot \
-            --outputdir ${ROBOT_DIR} \
+            --outputdir "${ROBOT_DIR}" \
             --reporttitle "Wikipedia - test report" \
             --logtitle    "Wikipedia - test log"  \
             --variable HEADLESS:${HEADLESS} \
@@ -59,33 +59,76 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot & ZIP (rób nawet przy FAIL) ---
+      // --- Snapshot (z kadrowaniem pod „użyteczne” sekcje) + ZIP, także przy FAIL ---
       sh '''
         set -e
-        HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
+        HTML_REPORT="$(readlink -f "${ROBOT_DIR}/report.html" || true)"
         SNAP="${ROBOT_DIR}/report_snapshot.png"
 
-        if [ -n "$HTML" ] && [ -f "$HTML" ]; then
+        if [ -n "$HTML_REPORT" ] && [ -f "$HTML_REPORT" ]; then
+          # Ustawienia kadru – dopasuj w razie potrzeby
+          VIEW_W=1200     # szerokość końcowego obrazka
+          VIEW_H=800      # wysokość końcowego obrazka
+          SCALE=1.7       # powiększenie raportu w kadrze
+          SHIFT_X=60      # ile „uciąć” z lewej (px)
+          SHIFT_Y=110     # ile „uciąć” z góry  (px)
+
+          CROPH="${ROBOT_DIR}/report_crop.html"
+          cat > "$CROPH" <<'HTML'
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:#fff;overflow:hidden}
+  .frame{width:__VIEW_W__px;height:__VIEW_H__px;overflow:hidden}
+  .inner{
+    width:1600px;height:1200px;border:0;
+    transform: translate(-__SHIFT_X__px, -__SHIFT_Y__px) scale(__SCALE__);
+    transform-origin: 0 0;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <iframe class="inner" src="file://__REPORT__"></iframe>
+  </div>
+</body></html>
+HTML
+          sed -i "s|__REPORT__|$HTML_REPORT|g" "$CROPH"
+          sed -i "s|__VIEW_W__|$VIEW_W|g" "$CROPH"
+          sed -i "s|__VIEW_H__|$VIEW_H|g" "$CROPH"
+          sed -i "s|__SCALE__|$SCALE|g"   "$CROPH"
+          sed -i "s|__SHIFT_X__|$SHIFT_X|g" "$CROPH"
+          sed -i "s|__SHIFT_Y__|$SHIFT_Y|g" "$CROPH"
+
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
-              "$B" --headless=new --disable-gpu --no-sandbox \
-                  --window-size=1600,1000 \
-                  --screenshot="${SNAP}" "file://${HTML}" && okshot=1 && break
+              "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
+                  --window-size=${VIEW_W},${VIEW_H} \
+                  --screenshot="${SNAP}" "file://${PWD}/$CROPH" && okshot=1 && break
             fi
           done
-          if [ "$okshot" -eq 1 ]; then
-            echo "Report snapshot created at ${SNAP}"
-          else
-            echo "WARN: could not create snapshot (no Chrome/Chromium found)."
+
+          if [ "$okshot" -ne 1 ]; then
+            echo "WARN: crop-snapshot failed, fallback to full report page"
+            for B in google-chrome google-chrome-stable chromium chromium-browser; do
+              if command -v "$B" >/dev/null 2>&1; then
+                "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
+                    --window-size=1280,720 \
+                    --screenshot="${SNAP}" "file://${HTML_REPORT}" && okshot=1 && break
+              fi
+            done
           fi
+
+          [ "$okshot" -eq 1 ] && echo "✅ Snapshot ready: ${SNAP}" || echo "⚠️  Snapshot not created."
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
-        ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
+        ( cd "${ROBOT_DIR}" && zip -9qr ../"${ROBOT_DIR}.zip" . ) || true
       '''
 
+      // Publikacja artefaktów (zawsze dostępne, także przy FAIL)
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -95,7 +138,7 @@ pipeline {
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-mail ---
+      // --- E-mail (bez sekcji podsumowań testów; tylko Git + przycisk + snapshot) ---
       script {
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
@@ -105,7 +148,7 @@ pipeline {
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
         ).trim().replaceFirst(/^origin\\//,'')
-        def shortSha = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
+        def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty="%an" 2>/dev/null || echo "-"', returnStdout: true).trim()
 
@@ -143,7 +186,7 @@ pipeline {
   a.zip       { background:#0ea5e9 }
   img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
 
-  /* Commit meta */
+  /* Commit meta (ładniejsze, z ikonami) */
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
