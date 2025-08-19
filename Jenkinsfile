@@ -10,6 +10,11 @@ pipeline {
     MAX_ATTACH_MB  = "7"                    // cap email attachment size
   }
 
+  options {
+    timestamps()
+    ansiColor('xterm')
+  }
+
   stages {
 
     stage('Checkout') {
@@ -38,58 +43,49 @@ pipeline {
 
     stage('Run tests') {
       steps {
-        sh '''
-          set -e
-          echo "🧹 Cleaning old /tmp/robot-* profiles"
-          find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
+        // Nie przerywaj całego pipeline przy błędzie – ale ustaw wynik na FAILURE
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+          sh '''
+            set -e
+            echo "🧹 Cleaning old /tmp/robot-* profiles"
+            find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
-          . ${PY_ENV}/bin/activate
-          mkdir -p ${ROBOT_DIR}
+            . ${PY_ENV}/bin/activate
+            mkdir -p ${ROBOT_DIR}
 
-          robot \
-            --outputdir ${ROBOT_DIR} \
-            --reporttitle "Wikipedia - test report" \
-            --logtitle    "Wikipedia - test log"  \
-            --variable HEADLESS:${HEADLESS} \
-            tests/
-        '''
+            robot \
+              --outputdir ${ROBOT_DIR} \
+              --reporttitle "Wikipedia - test report" \
+              --logtitle    "Wikipedia - test log"  \
+              --variable HEADLESS:${HEADLESS} \
+              tests/
+          '''
+        }
       }
     }
 
     stage('Make snapshot & package') {
+      when {
+        expression { fileExists("${ROBOT_DIR}/report.html") }
+      }
       steps {
+        // Snapshot z report.html + spakowanie artefaktów
         sh '''
           set -e
           HTML="$(readlink -f ${ROBOT_DIR}/report.html)"
-
-          # unikalna nazwa pliku + usuń stare snapshoty
-          SNAP="${ROBOT_DIR}/report_snapshot_${BUILD_NUMBER}.png"
-          rm -f "${ROBOT_DIR}"/report_snapshot_*.png || true
-
-          # poczekaj aż report.html przestanie się zmieniać
-          for i in $(seq 1 30); do
-            S1=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
-            sleep 0.3
-            S2=$(stat -c%s "$HTML" 2>/dev/null || echo 0)
-            if [ "$S1" = "$S2" ] && [ "$S2" -gt 0 ]; then break; fi
-          done
+          SNAP="${ROBOT_DIR}/report_snapshot.png"
 
           okshot=0
-          for B in google-chrome-stable google-chrome chromium chromium-browser; do
+          for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
               "$B" --headless=new --disable-gpu --no-sandbox \
-                  --user-data-dir="/tmp/snap-${BUILD_TAG}" \
-                  --disk-cache-size=1 \
-                  --window-size=1600,1000 \
+                  --window-size=1920,1200 \
                   --screenshot="${SNAP}" "file://${HTML}" && okshot=1 && break
             fi
           done
-
           if [ "$okshot" -eq 1 ]; then
-            echo "SNAPSHOT_WRITTEN=${SNAP}" > .snapshot_env
             echo "✅ Report snapshot created at ${SNAP}"
           else
-            : > .snapshot_env
             echo "⚠️  Could not create report snapshot (no Chrome/Chromium)."
           fi
 
@@ -99,14 +95,23 @@ pipeline {
     }
 
     stage('Publish report') {
+      when {
+        expression { fileExists("${ROBOT_DIR}/report.html") }
+      }
       steps {
-        publishHTML(target: [
-          allowMissing: false,
-          keepAll: true,
-          reportDir: "${ROBOT_DIR}",
-          reportFiles: "report.html",
-          reportName: "Robot Report"
-        ])
+        script {
+          try {
+            publishHTML(target: [
+              allowMissing: false,
+              keepAll: true,
+              reportDir: "${ROBOT_DIR}",
+              reportFiles: "report.html",
+              reportName: "Robot Report"
+            ])
+          } catch (e) {
+            echo "WARN publishHTML: ${e}"
+          }
+        }
         archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
       }
     }
@@ -115,45 +120,82 @@ pipeline {
   post {
     always {
       script {
-        // ----- Links -----
+        // ----- Linki -----
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // ----- Git meta (safe fallbacks) -----
+        // ----- Git meta (z bezpiecznymi fallbackami) -----
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
-        ).trim().replaceFirst(/^origin\//,'')
+        ).trim().replaceFirst(/^origin\\//,'')
         def shortSha = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def subject  = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author   = sh(script: 'git log -1 --pretty="%an <%ae>" 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // ----- KPIs from output.xml -----
-        def total='0', passed='0', failed='0', elapsed='n/a', startTime='-', endTime='-'
-        try {
-          def xml = new XmlSlurper().parse(new File("${env.WORKSPACE}/${ROBOT_DIR}/output.xml"))
-          def stat = xml.statistics.total.stat[0]
-          if (stat) {
-            total  = (stat.@total?.toString() ?: '0')
-            passed = (stat.@pass ?.toString() ?: '0')
-            failed = (stat.@fail ?.toString() ?: '0')
-          }
-          def ms = (xml.@elapsedtime?.toString() ?: '')
-          if (ms) {
-            long s = (ms as long) / 1000L
-            elapsed = String.format("%02d:%02d", (int)(s/60), (int)(s%60))
-          }
-          def suite = xml.suite[0]
-          startTime = suite?.@starttime?.toString() ?: '-'
-          endTime   = suite?.@endtime  ?.toString() ?: '-'
-        } catch (e) {
-          echo "WARN: Failed to parse output.xml: ${e}"
+        // ----- Spróbuj utworzyć snapshot, jeśli nie powstał w etapie -----
+        def shotPath = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
+        if (!fileExists(shotPath) && fileExists("${env.WORKSPACE}/${ROBOT_DIR}/report.html")) {
+          sh '''
+            set -e
+            HTML="$(readlink -f ${ROBOT_DIR}/report.html)"
+            SNAP="${ROBOT_DIR}/report_snapshot.png"
+            for B in google-chrome google-chrome-stable chromium chromium-browser; do
+              if command -v "$B" >/dev/null 2>&1; then
+                "$B" --headless=new --disable-gpu --no-sandbox --window-size=1920,1200 \
+                    --screenshot="${SNAP}" "file://${HTML}" && break
+              fi
+            done
+          '''
         }
 
-        // ----- Decide what to render -----
-        boolean hasStats  = !((total == '0' && passed == '0' && failed == '0') || total == null)
-        boolean hasTiming = !((elapsed == 'n/a' || elapsed == null) && (startTime == '-' && endTime == '-'))
+        // ----- KPI z output.xml – bez XmlSlurper (Python -> env file) -----
+        sh '''
+          set -e
+          OUT="${ROBOT_DIR}/output.xml"
+          [ -f "$OUT" ] || { : > "${ROBOT_DIR}/metrics.env"; exit 0; }
+          python3 - "$OUT" > "${ROBOT_DIR}/metrics.env" << 'PY'
+import sys, xml.etree.ElementTree as ET
+p = sys.argv[1]
+try:
+    root = ET.parse(p).getroot()
+    ms = root.attrib.get("elapsedtime","")
+    if ms:
+        s = int(ms)//1000
+        dur = f"{s//60:02d}:{s%60:02d}"
+    else:
+        dur = "n/a"
+    stat = root.find("./statistics/total/stat")
+    total  = stat.get("total","0") if stat is not None else "0"
+    passed = stat.get("pass","0")  if stat is not None else "0"
+    failed = stat.get("fail","0")  if stat is not None else "0"
+    print(f"TOTAL={total}")
+    print(f"PASSED={passed}")
+    print(f"FAILED={failed}")
+    print(f"DURATION={dur}")
+except Exception:
+    pass
+PY
+        '''
+
+        def total='0', passed='0', failed='0', elapsed='n/a'
+        if (fileExists("${ROBOT_DIR}/metrics.env")) {
+          def lines = readFile("${ROBOT_DIR}/metrics.env").trim().split("\\n")
+          def M = [:]
+          lines.each { l ->
+            def kv = l.tokenize('=')
+            if (kv.size()==2) M[kv[0]] = kv[1]
+          }
+          total   = M['TOTAL']   ?: '0'
+          passed  = M['PASSED']  ?: '0'
+          failed  = M['FAILED']  ?: '0'
+          elapsed = M['DURATION']?: 'n/a'
+        }
+
+        // Pokaż KPI tylko jeśli sensownie policzone
+        boolean hasStats  = !(total == '0' && passed == '0' && failed == '0')
+        boolean hasTiming = !(elapsed == 'n/a')
 
         String kpiSection = hasStats ? """
     <div class="grid">
@@ -168,29 +210,16 @@ pipeline {
         String execSection = hasTiming ? """
     <div class="section">
       <div class="h">Execution</div>
-      <div><b>Start:</b> ${startTime}</div>
-      <div><b>End:</b> ${endTime}</div>
       <div><b>Node:</b> ${env.NODE_NAME ?: 'built-in'}</div>
       <div><b>Browser:</b> Chrome (headless=${env.HEADLESS})</div>
     </div>
 """ : ""
 
-        // ----- read snapshot path created in stage -----
-        if (fileExists('.snapshot_env')) {
-          def txt = readFile('.snapshot_env').trim()
-          if (txt?.startsWith('SNAPSHOT_WRITTEN=')) {
-            env.SNAPSHOT_FILE = txt.split('=')[1]
-          }
-        }
-
-        // ----- Inline snapshot (unique filename per build) -----
-        def imgTag = ''
-        def shot   = env.SNAPSHOT_FILE ?: "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot_${env.BUILD_NUMBER}.png"
-        if (fileExists(shot)) {
-          def b64 = sh(script: "base64 -w0 '${shot}'", returnStdout: true).trim()
+        // ----- Inline snapshot (albo placeholder) -----
+        def imgTag = '<div class="placeholder">Snapshot unavailable</div>'
+        if (fileExists(shotPath)) {
+          def b64 = sh(script: "base64 -w0 '${shotPath}'", returnStdout: true).trim()
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
-        } else {
-          imgTag = '<div style="padding:12px;border:1px dashed #ccc;border-radius:8px">Snapshot unavailable</div>'
         }
 
         // ----- Email -----
@@ -225,13 +254,13 @@ pipeline {
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .muted { color:#6b7280; font-size:12px }
   img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
+  .placeholder { border:1px dashed #cbd5e1; background:#fff; border-radius:10px; color:#64748b; padding:24px; text-align:center }
 </style>
 </head>
 <body>
   <div class="card">
     <div class="status">${statusIcon} ${buildStatus} <span class="sub">• ${env.JOB_NAME}</span> <span class="sub">• Build #${env.BUILD_NUMBER}</span></div>
 
-    <!-- KPIs (shown only when available) -->
     ${kpiSection}
 
     <div class="section">
@@ -242,44 +271,9 @@ pipeline {
       <div><b>Author:</b> ${author}</div>
     </div>
 
-    <!-- Execution (shown only when timing is available) -->
     ${execSection}
 
     <div class="btns">
       <a class="btn primary"   href="${reportUrl}"  target="_blank">🔎 Open “Wikipedia - test report”</a>
       <a class="btn secondary" href="${consoleUrl}" target="_blank">🖥 Console Output</a>
-      <a class="btn zip"       href="${zipUrl}"     target="_blank">📦 Download results (ZIP)</a>
-    </div>
-
-    <div class="section">${imgTag}</div>
-    <div class="section muted">If Chrome blocks direct HTML artifacts due to CSP, use the “Robot Report” link above (publisher view).</div>
-  </div>
-</body>
-</html>
-"""
-
-        // Attach ZIP if small enough
-        def zipPath   = "${ROBOT_DIR}.zip"
-        def attachZip = false
-        if (fileExists(zipPath)) {
-          try {
-            long bytes   = (sh(script: "stat -c%s '${zipPath}' || echo 0", returnStdout: true).trim() as long)
-            long maxByte = (env.MAX_ATTACH_MB as Integer) * 1024L * 1024L
-            attachZip = (bytes > 0 && bytes <= maxByte)
-            echo "ZIP size: ${bytes} bytes (attach <= ${maxByte}) -> attachZip=${attachZip}"
-          } catch (ignored) {}
-        }
-
-        if (attachZip) {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
-        } else {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: body, mimeType: 'text/html')
-        }
-
-        echo "Pipeline finished: ${currentBuild.currentResult}"
-      }
-    }
-  }
-}
+      <a class="btn zip"       href="${zipUrl}"     target="_blank">📦 Download r_
