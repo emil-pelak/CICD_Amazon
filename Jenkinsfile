@@ -32,6 +32,8 @@ pipeline {
           . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
+          # potrzebne do przycinania PNG
+          pip install Pillow
         '''
       }
     }
@@ -40,7 +42,7 @@ pipeline {
       steps {
         sh '''
           set -e
-          echo "🧹 Cleaning old /tmp/robot-* profiles"
+          echo "Cleaning old /tmp/robot-* profiles"
           find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
           . ${PY_ENV}/bin/activate
@@ -59,9 +61,11 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot (rób zawsze, także przy FAIL) + ZIP ---
+      // --- Snapshot & ZIP (rób zawsze; błędy nie przerywają post) ---
       sh '''
         set -e
+        . ${PY_ENV}/bin/activate || true
+
         HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
         SNAP_RAW="${ROBOT_DIR}/report_raw.png"
         SNAP="${ROBOT_DIR}/report_snapshot.png"
@@ -78,34 +82,29 @@ pipeline {
           done
 
           if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
-            python3 - "$SNAP_RAW" "$SNAP" <<'PY'
+            # Przycięcie do użytecznej części; jeśli PIL niedostępny, użyj RAW
+            "${PY_ENV}/bin/python" - "$SNAP_RAW" "$SNAP" <<'PY' || cp -f "$SNAP_RAW" "$SNAP"
 from PIL import Image
 import sys
-
 raw, out = sys.argv[1], sys.argv[2]
 im = Image.open(raw)
 w, h = im.size
-
-# Przycięcie „pod mail”: od okolic nagłówka raportu,
-# tak żeby zmieścić tytuł + Summary + Test Statistics.
-# Heurystyka: bierzemy górny fragment strony.
-top = max(0, int(0.10 * h) - 120)     # przesunięcie w górę, by złapać tytuł
-height = min(1250, h - top)           # ile pokazujemy w pionie
-box = (0, top, w, top + height)
-im.crop(box).save(out, format="PNG", optimize=True)
+top = max(0, int(0.10*h) - 120)   # złap tytuł + kawałek ponad
+height = min(1250, h - top)       # pokaż tytuł + Summary + Test Statistics
+im.crop((0, top, w, top + height)).save(out, format="PNG", optimize=True)
 PY
             echo "Report snapshot created at ${SNAP}"
           else
-            echo "WARN: could not create snapshot (no Chrome/Chromium or empty capture)."
+            echo "WARN: could not create RAW snapshot (no Chrome/Chromium)."
           fi
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
         ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
-      '''
+      '''.trim()
 
-      // HTML publisher + artefakty (allowMissing, bo przy FAIL też chcemy wysłać)
+      // Publikacja i artefakty – nie przerywaj nawet jeśli brakuje HTML
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -134,6 +133,9 @@ PY
         if (fileExists(shot)) {
           def b64 = sh(script: "base64 -w0 '${shot}'", returnStdout: true).trim()
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
+        } else if (fileExists("${env.WORKSPACE}/${ROBOT_DIR}/report_raw.png")) {
+          def b64 = sh(script: "base64 -w0 '${env.WORKSPACE}/${ROBOT_DIR}/report_raw.png'", returnStdout: true).trim()
+          imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot (raw)"/>'
         } else {
           imgTag = '<div class="thumb" style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280">Snapshot unavailable</div>'
         }
@@ -234,6 +236,7 @@ PY
 </html>
 """
 
+        // Załącz ZIP jeśli nie za duży
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
