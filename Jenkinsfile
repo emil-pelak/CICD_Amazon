@@ -28,8 +28,8 @@ pipeline {
       steps {
         sh '''
           set -e
-          python3 -m venv "${PY_ENV}" || true
-          . "${PY_ENV}/bin/activate"
+          python3 -m venv ${PY_ENV} || true
+          . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
         '''
@@ -43,11 +43,11 @@ pipeline {
           echo "🧹 Cleaning old /tmp/robot-* profiles"
           find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
-          . "${PY_ENV}/bin/activate"
-          mkdir -p "${ROBOT_DIR}"
+          . ${PY_ENV}/bin/activate
+          mkdir -p ${ROBOT_DIR}
 
           robot \
-            --outputdir "${ROBOT_DIR}" \
+            --outputdir ${ROBOT_DIR} \
             --reporttitle "Wikipedia - test report" \
             --logtitle    "Wikipedia - test log"  \
             --variable HEADLESS:${HEADLESS} \
@@ -59,76 +59,53 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot (z kadrowaniem pod „użyteczne” sekcje) + ZIP, także przy FAIL ---
+      // --- Snapshot (rób zawsze, także przy FAIL) + ZIP ---
       sh '''
         set -e
-        HTML_REPORT="$(readlink -f "${ROBOT_DIR}/report.html" || true)"
+        HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
+        SNAP_RAW="${ROBOT_DIR}/report_raw.png"
         SNAP="${ROBOT_DIR}/report_snapshot.png"
 
-        if [ -n "$HTML_REPORT" ] && [ -f "$HTML_REPORT" ]; then
-          # Ustawienia kadru – dopasuj w razie potrzeby
-          VIEW_W=1200     # szerokość końcowego obrazka
-          VIEW_H=800      # wysokość końcowego obrazka
-          SCALE=1.7       # powiększenie raportu w kadrze
-          SHIFT_X=60      # ile „uciąć” z lewej (px)
-          SHIFT_Y=110     # ile „uciąć” z góry  (px)
-
-          CROPH="${ROBOT_DIR}/report_crop.html"
-          cat > "$CROPH" <<'HTML'
-<!doctype html>
-<html><head><meta charset="utf-8">
-<style>
-  html,body{margin:0;padding:0;background:#fff;overflow:hidden}
-  .frame{width:__VIEW_W__px;height:__VIEW_H__px;overflow:hidden}
-  .inner{
-    width:1600px;height:1200px;border:0;
-    transform: translate(-__SHIFT_X__px, -__SHIFT_Y__px) scale(__SCALE__);
-    transform-origin: 0 0;
-  }
-</style>
-</head>
-<body>
-  <div class="frame">
-    <iframe class="inner" src="file://__REPORT__"></iframe>
-  </div>
-</body></html>
-HTML
-          sed -i "s|__REPORT__|$HTML_REPORT|g" "$CROPH"
-          sed -i "s|__VIEW_W__|$VIEW_W|g" "$CROPH"
-          sed -i "s|__VIEW_H__|$VIEW_H|g" "$CROPH"
-          sed -i "s|__SCALE__|$SCALE|g"   "$CROPH"
-          sed -i "s|__SHIFT_X__|$SHIFT_X|g" "$CROPH"
-          sed -i "s|__SHIFT_Y__|$SHIFT_Y|g" "$CROPH"
-
+        if [ -n "$HTML" ] && [ -f "$HTML" ]; then
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
               "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
-                  --window-size=${VIEW_W},${VIEW_H} \
-                  --screenshot="${SNAP}" "file://${PWD}/$CROPH" && okshot=1 && break
+                  --force-device-scale-factor=1.25 \
+                  --window-size=1600,1800 \
+                  --screenshot="${SNAP_RAW}" "file://${HTML}" && okshot=1 && break
             fi
           done
 
-          if [ "$okshot" -ne 1 ]; then
-            echo "WARN: crop-snapshot failed, fallback to full report page"
-            for B in google-chrome google-chrome-stable chromium chromium-browser; do
-              if command -v "$B" >/dev/null 2>&1; then
-                "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
-                    --window-size=1280,720 \
-                    --screenshot="${SNAP}" "file://${HTML_REPORT}" && okshot=1 && break
-              fi
-            done
-          fi
+          if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
+            python3 - "$SNAP_RAW" "$SNAP" <<'PY'
+from PIL import Image
+import sys
 
-          [ "$okshot" -eq 1 ] && echo "✅ Snapshot ready: ${SNAP}" || echo "⚠️  Snapshot not created."
+raw, out = sys.argv[1], sys.argv[2]
+im = Image.open(raw)
+w, h = im.size
+
+# Przycięcie „pod mail”: od okolic nagłówka raportu,
+# tak żeby zmieścić tytuł + Summary + Test Statistics.
+# Heurystyka: bierzemy górny fragment strony.
+top = max(0, int(0.10 * h) - 120)     # przesunięcie w górę, by złapać tytuł
+height = min(1250, h - top)           # ile pokazujemy w pionie
+box = (0, top, w, top + height)
+im.crop(box).save(out, format="PNG", optimize=True)
+PY
+            echo "Report snapshot created at ${SNAP}"
+          else
+            echo "WARN: could not create snapshot (no Chrome/Chromium or empty capture)."
+          fi
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
-        ( cd "${ROBOT_DIR}" && zip -9qr ../"${ROBOT_DIR}.zip" . ) || true
+        ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
       '''
 
-      // Publikacja artefaktów (zawsze dostępne, także przy FAIL)
+      // HTML publisher + artefakty (allowMissing, bo przy FAIL też chcemy wysłać)
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -138,7 +115,7 @@ HTML
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-mail (bez sekcji podsumowań testów; tylko Git + przycisk + snapshot) ---
+      // --- E-mail ---
       script {
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
@@ -173,7 +150,7 @@ HTML
 <meta charset="utf-8"/>
 <title>${subj}</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
+  body { font-family:-apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
   .card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; max-width:900px; margin:auto; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06) }
   .status { background:${statusColor}; color:#fff; padding:16px 20px; font-size:18px; font-weight:700 }
   .sub { color:#e5e7eb; font-weight:500 }
@@ -185,8 +162,6 @@ HTML
   a.secondary { background:#374151 }
   a.zip       { background:#0ea5e9 }
   img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
-
-  /* Commit meta (ładniejsze, z ikonami) */
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
@@ -194,7 +169,6 @@ HTML
   .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
   .chip.branch { background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a }
   .chip.sha    { background:#ecfeff; border-color:#cffafe; color:#155e75 }
-
   .ic { width:18px; height:18px; vertical-align:middle }
   .title { font-weight:700; color:#111827 }
   .author { color:#111827 }
@@ -206,7 +180,6 @@ HTML
 
     <div class="section">
       <div class="h">
-        <!-- Git logo (inline SVG) -->
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="5" y="5" width="14" height="14" rx="3" ry="3" fill="#f1502f" transform="rotate(45 12 12)"></rect>
           <circle cx="10" cy="10" r="1.8" fill="white"></circle>
@@ -221,7 +194,6 @@ HTML
         <div class="box">
           <div class="row">
             <span class="label">
-              <!-- Branch icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="6" cy="6" r="2.2" fill="#1e3a8a"></circle>
                 <circle cx="18" cy="6" r="2.2" fill="#1e3a8a"></circle>
@@ -232,10 +204,8 @@ HTML
             </span>
             <span class="chip branch">${branch}</span>
           </div>
-
           <div class="row">
             <span class="label">
-              <!-- Hash icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M9 3 L7 21 M17 3 L15 21 M4 9 H20 M3 15 H19" stroke="#155e75" stroke-width="2" fill="none" stroke-linecap="round"></path>
               </svg>
@@ -264,7 +234,6 @@ HTML
 </html>
 """
 
-        // Załącz ZIP jeśli nie za duży
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
