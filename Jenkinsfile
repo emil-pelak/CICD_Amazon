@@ -89,21 +89,21 @@ pipeline {
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Passed/Failed z output.xml (bez sandboxowych parserów)
+        // --- Passed/Failed z output.xml (fix: prawdziwa ścieżka przekazana do Pythona) ---
         def xmlPath = "${ROBOT_DIR}/output.xml"
         def pfLine = fileExists(xmlPath)
-          ? sh(returnStdout: true, script: """python3 - "\$xmlPath" <<'PY'
+          ? sh(returnStdout: true, script: """python3 - "${xmlPath}" <<'PY'
 import sys, xml.etree.ElementTree as ET
 p=f=0
-path=sys.argv[1]
 try:
-    root=ET.parse(path).getroot()
+    root = ET.parse(sys.argv[1]).getroot()
     for s in root.findall('.//statistics/total/stat'):
-        if (s.text or '').strip().lower()=='all tests':
-            p=int(s.get('pass',0) or 0)
-            f=int(s.get('fail',0) or 0)
+        if (s.text or '').strip().lower() == 'all tests':
+            p = int(s.get('pass') or 0)
+            f = int(s.get('fail') or 0)
             break
-except Exception: pass
+except Exception:
+    pass
 print(f"{p},{f}")
 PY
 """).trim()
@@ -127,7 +127,7 @@ PY
 <style>
   body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f6f7fb;padding:18px}
   .card{max-width:960px;margin:auto;background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden}
-  .hdr{padding:14px 18px;font-weight:700;color:#111827;background:${buildStatus=='SUCCESS' ? '#22c55e' : '#ef4444'};color:#fff}
+  .hdr{padding:14px 18px;font-weight:700;background:${buildStatus=='SUCCESS' ? '#22c55e' : '#ef4444'};color:#fff}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px 18px}
   .box{border:1px solid #eef2f7;border-radius:12px;padding:12px}
   .lbl{color:#6b7280;font-size:12px}
