@@ -67,7 +67,7 @@ pipeline {
         SNAP="${ROBOT_DIR}/report_snapshot.png"
 
         if [ -n "$HTML" ] && [ -f "$HTML" ]; then
-          # Zbuduj odchudzony HTML – podajemy ścieżki jako ARGUMENTY
+          # budujemy odchudzony HTML (Summary + Test Statistics)
           python3 - "$HTML" "$FOCUS_HTML" <<'PY' || true
 import sys, re, pathlib
 src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
@@ -140,15 +140,18 @@ PY
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
       script {
+        // ----- Linki -----
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
+        // ----- Git -----
         def branch      = sh(script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main', returnStdout: true).trim().replaceFirst(/^origin\\//,'')
         def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
+        // ----- Snapshot inline -----
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(shot)) {
@@ -158,11 +161,13 @@ PY
           imgTag = '<div style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280">Snapshot unavailable</div>'
         }
 
+        // ----- Nagłówek maila -----
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
 
+        // ----- Treść maila -----
         String body = """
 <!doctype html>
 <html>
@@ -254,6 +259,7 @@ PY
 </html>
 """
 
+        // --- Załącz ZIP jeśli nie za duży ---
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
@@ -265,7 +271,6 @@ PY
           } catch (ignored) {}
         }
 
-        String subj = "[${currentBuild.currentResult ?: 'SUCCESS'}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
         if (attachZip) {
           emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
                    body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
