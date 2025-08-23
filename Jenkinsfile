@@ -7,11 +7,10 @@ pipeline {
     HEADLESS       = "true"
     EMAIL_FROM     = "emil-pelak@wp.pl"
     EMAIL_TO       = "emil-pelak@outlook.com"
-    MAX_ATTACH_MB  = "7"           // limit załącznika ZIP
+    MAX_ATTACH_MB  = "7"
   }
 
   stages {
-
     stage('Checkout') {
       steps {
         checkout([$class: 'GitSCM',
@@ -27,12 +26,10 @@ pipeline {
     stage('Install dependencies') {
       steps {
         sh '''
-          set -e
           python3 -m venv ${PY_ENV} || true
           . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          # do kadrowania/skalowania obrazka
           pip install Pillow
         '''
       }
@@ -41,7 +38,6 @@ pipeline {
     stage('Run tests') {
       steps {
         sh '''
-          set -e
           echo "Cleaning old /tmp/robot-* profiles"
           find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
@@ -61,9 +57,8 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot: WYCIĄGAMY TYLKO TABELKI (Summary + Test Statistics), SKALUJEMY DO 50% ---
+      // ---------- Snapshot: tylko wartościowe tabele + skala 50% ----------
       sh '''
-        set -e
         . ${PY_ENV}/bin/activate
 
         HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
@@ -72,41 +67,34 @@ pipeline {
         SNAP="${ROBOT_DIR}/report_snapshot.png"
 
         if [ -n "$HTML" ] && [ -f "$HTML" ]; then
-          # Zbuduj minimalny HTML tylko z wartościowymi tabelami
-          python - <<'PY'
-import re, pathlib, sys
-src = pathlib.Path("${HTML}").read_text(encoding="utf-8", errors="ignore")
+          # Zbuduj odchudzony HTML – podajemy ścieżki jako ARGUMENTY
+          python3 - "$HTML" "$FOCUS_HTML" <<'PY' || true
+import sys, re, pathlib
+src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+focus = pathlib.Path(sys.argv[2])
 
-# CSS z oryginału
 m_style = re.search(r"<style[^>]*>(.*?)</style>", src, re.S|re.I)
 css = m_style.group(1) if m_style else ""
-
-# Rdzeń: od "Summary Information" do tuż przed "Test Details"
 m_core = re.search(r"(<h2[^>]*>\\s*Summary Information.*?)(?=<h2[^>]*>\\s*Test Details)", src, re.S|re.I)
 if not m_core:
-    # fallback: od "Test Statistics" do "Test Details"
     m_core = re.search(r"(<h2[^>]*>\\s*Test Statistics.*?)(?=<h2[^>]*>\\s*Test Details)", src, re.S|re.I)
-
 core = m_core.group(1) if m_core else src
-
-# Delikatne odchudzenie (usuwamy log link/boksy detali jeśli by się zawieruszyły)
 core = re.sub(r"<h2[^>]*>\\s*Test Details[\\s\\S]*$", "", core, flags=re.I)
 
 minimal = f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <style>{css}</style>
 <style>
-  body {{ background:#ffffff; margin:8px; }}
-  #log {{ display:none !important; }}
-  .statistics, .content {{ max-width:1200px; margin:auto; }}
+  body {{ background:#fff; margin:8px }}
+  #log {{ display:none !important }}
+  .statistics, .content {{ max-width:1200px; margin:auto }}
 </style>
 </head><body>
 {core}
 </body></html>"""
-pathlib.Path("${FOCUS_HTML}").write_text(minimal, encoding="utf-8")
+focus.write_text(minimal, encoding="utf-8")
 PY
 
-          # Screenshot skoncentrowanego widoku
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
@@ -117,27 +105,18 @@ PY
           done
 
           if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
-            # Kadrowanie ramek + zmniejszenie do 50%
-            python - <<'PY'
+            python3 - "${SNAP_RAW}" "${SNAP}" <<'PY' || true
+import sys
 from PIL import Image, ImageChops
 from pathlib import Path
-raw = Path("${SNAP_RAW}")
-out = Path("${SNAP}")
+raw, out = Path(sys.argv[1]), Path(sys.argv[2])
 im = Image.open(raw).convert("RGB")
-
-# Przytnij jednolite marginesy (białe tło)
 bg = Image.new(im.mode, im.size, im.getpixel((0,0)))
-diff = ImageChops.difference(im, bg)
-bbox = diff.getbbox() or (0,0,im.width,im.height)
+bbox = ImageChops.difference(im, bg).getbbox() or (0,0,im.width,im.height)
 l,t,r,b = bbox
-
-# Bezpieczny margines dookoła, żeby nic nie uciąć
 pad = 8
 l = max(0, l-pad); t = max(0, t-pad); r = min(im.width, r+pad); b = min(im.height, b+pad)
-im = im.crop((l,t,r,b))
-
-# Skala 50% (połowa)
-im = im.resize((max(1,im.width//2), max(1,im.height//2)), Image.LANCZOS)
+im = im.crop((l,t,r,b)).resize((max(1,int((r-l)/2)), max(1,int((b-t)/2))), Image.LANCZOS)
 im.save(out, optimize=True, quality=85)
 PY
             echo "Report snapshot created at ${SNAP}"
@@ -148,11 +127,9 @@ PY
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
-        # Zawsze spakuj artefakty robota
         ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
       '''
 
-      // Opublikuj i zarchiwizuj
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -162,21 +139,16 @@ PY
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-mail z ładnym meta i wklejonym snapshotem ---
       script {
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        def branch = sh(
-          script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
-          returnStdout: true
-        ).trim().replaceFirst(/^origin\\//,'')
-        def shortSha   = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
-        def commitTitle= sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
-        def author     = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def branch      = sh(script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main', returnStdout: true).trim().replaceFirst(/^origin\\//,'')
+        def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
+        def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Snapshot inline (jeśli jest), bez zbędnych ramek
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(shot)) {
@@ -282,7 +254,6 @@ PY
 </html>
 """
 
-        // dołącz ZIP tylko jeśli mieści się w limicie
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
@@ -294,6 +265,7 @@ PY
           } catch (ignored) {}
         }
 
+        String subj = "[${currentBuild.currentResult ?: 'SUCCESS'}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
         if (attachZip) {
           emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
                    body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
