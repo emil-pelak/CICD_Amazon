@@ -1,13 +1,16 @@
+// Jenkinsfile
+// CICD_Wikipedia – Robot Framework + Selenium + e-mail z podglądem raportu (snapshot 50%)
+
 pipeline {
   agent any
 
   environment {
     ROBOT_DIR      = "robot_reports"
     PY_ENV         = "venv"
-    HEADLESS       = "true"
+    HEADLESS       = "true"                 // uruchamiaj przeglądarkę w headless
     EMAIL_FROM     = "emil-pelak@wp.pl"
     EMAIL_TO       = "emil-pelak@outlook.com"
-    MAX_ATTACH_MB  = "7"
+    MAX_ATTACH_MB  = "7"                    // maks. rozmiar załącznika ZIP do e-maila
   }
 
   stages {
@@ -32,7 +35,7 @@ pipeline {
           . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          # potrzebne do przycinania PNG
+          # do obróbki zrzutu ekranu (zmniejszenie do 50%)
           pip install Pillow
         '''
       }
@@ -61,10 +64,10 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot & ZIP (rób zawsze; błędy nie przerywają post) ---
+      // --- Snapshot i ZIP (rób nawet przy FAIL) ---
       sh '''
         set -e
-        . ${PY_ENV}/bin/activate || true
+        . ${PY_ENV}/bin/activate
 
         HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
         SNAP_RAW="${ROBOT_DIR}/report_raw.png"
@@ -74,37 +77,39 @@ pipeline {
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
-              "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
-                  --force-device-scale-factor=1.25 \
-                  --window-size=1600,1800 \
+              "$B" --headless=new --disable-gpu --no-sandbox \
+                  --hide-scrollbars \
+                  --force-device-scale-factor=1.0 \
+                  --window-size=1600,1500 \
                   --screenshot="${SNAP_RAW}" "file://${HTML}" && okshot=1 && break
             fi
           done
 
           if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
-            # Przycięcie do użytecznej części; jeśli PIL niedostępny, użyj RAW
-            "${PY_ENV}/bin/python" - "$SNAP_RAW" "$SNAP" <<'PY' || cp -f "$SNAP_RAW" "$SNAP"
+            # zmniejsz do 50% (fizycznie) i zapisz finalny snapshot
+            python3 - "${SNAP_RAW}" "${SNAP}" <<'PY' || true
 from PIL import Image
 import sys
-raw, out = sys.argv[1], sys.argv[2]
-im = Image.open(raw)
+src, dst = sys.argv[1], sys.argv[2]
+im = Image.open(src).convert("RGB")
 w, h = im.size
-top = max(0, int(0.10*h) - 120)   # złap tytuł + kawałek ponad
-height = min(1250, h - top)       # pokaż tytuł + Summary + Test Statistics
-im.crop((0, top, w, top + height)).save(out, format="PNG", optimize=True)
+im = im.resize((w//2, h//2), Image.Resampling.LANCZOS)
+im.save(dst, optimize=True)   # PNG z mniejszym rozmiarem
+print(f"Saved {dst} ({im.size[0]}x{im.size[1]})")
 PY
+            rm -f "${SNAP_RAW}" || true
             echo "Report snapshot created at ${SNAP}"
           else
-            echo "WARN: could not create RAW snapshot (no Chrome/Chromium)."
+            echo "WARN: could not create snapshot."
           fi
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
         ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
-      '''.trim()
+      '''
 
-      // Publikacja i artefakty – nie przerywaj nawet jeśli brakuje HTML
+      // publikacja raportu i artefaktów – zawsze (PASS/FAIL)
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -114,37 +119,39 @@ PY
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-mail ---
+      // --- E-MAIL z wbudowanym snapshotem ---
       script {
+        // Linki
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
+        // Metadane Gita (bezpieczne fallbacki)
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
         ).trim().replaceFirst(/^origin\\//,'')
         def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
-        def author      = sh(script: 'git log -1 --pretty="%an" 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
+        // Obrazek (inline base64) lub placeholder
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(shot)) {
           def b64 = sh(script: "base64 -w0 '${shot}'", returnStdout: true).trim()
           imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
-        } else if (fileExists("${env.WORKSPACE}/${ROBOT_DIR}/report_raw.png")) {
-          def b64 = sh(script: "base64 -w0 '${env.WORKSPACE}/${ROBOT_DIR}/report_raw.png'", returnStdout: true).trim()
-          imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot (raw)"/>'
         } else {
-          imgTag = '<div class="thumb" style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280">Snapshot unavailable</div>'
+          imgTag = '<div class="thumb" style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280;text-align:center">Snapshot unavailable</div>'
         }
 
+        // Nagłówki e-maila
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
 
+        // Treść e-maila (bez sekcji KPI, ładne meta Gita, mniejszy obrazek)
         String body = """
 <!doctype html>
 <html>
@@ -152,7 +159,7 @@ PY
 <meta charset="utf-8"/>
 <title>${subj}</title>
 <style>
-  body { font-family:-apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
   .card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; max-width:900px; margin:auto; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06) }
   .status { background:${statusColor}; color:#fff; padding:16px 20px; font-size:18px; font-weight:700 }
   .sub { color:#e5e7eb; font-weight:500 }
@@ -163,7 +170,9 @@ PY
   a.primary   { background:#111827 }
   a.secondary { background:#374151 }
   a.zip       { background:#0ea5e9 }
-  img.thumb { width:100%; max-width:880px; border:1px solid #eef2f7; border-radius:10px; display:block; }
+  img.thumb { width:100%; max-width:440px; border:1px solid #eef2f7; border-radius:10px; display:block; }
+
+  /* Commit meta */
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
@@ -171,6 +180,7 @@ PY
   .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
   .chip.branch { background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a }
   .chip.sha    { background:#ecfeff; border-color:#cffafe; color:#155e75 }
+
   .ic { width:18px; height:18px; vertical-align:middle }
   .title { font-weight:700; color:#111827 }
   .author { color:#111827 }
@@ -182,6 +192,7 @@ PY
 
     <div class="section">
       <div class="h">
+        <!-- Git logo (inline SVG) -->
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="5" y="5" width="14" height="14" rx="3" ry="3" fill="#f1502f" transform="rotate(45 12 12)"></rect>
           <circle cx="10" cy="10" r="1.8" fill="white"></circle>
@@ -196,6 +207,7 @@ PY
         <div class="box">
           <div class="row">
             <span class="label">
+              <!-- Branch icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="6" cy="6" r="2.2" fill="#1e3a8a"></circle>
                 <circle cx="18" cy="6" r="2.2" fill="#1e3a8a"></circle>
@@ -206,8 +218,10 @@ PY
             </span>
             <span class="chip branch">${branch}</span>
           </div>
+
           <div class="row">
             <span class="label">
+              <!-- Hash icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M9 3 L7 21 M17 3 L15 21 M4 9 H20 M3 15 H19" stroke="#155e75" stroke-width="2" fill="none" stroke-linecap="round"></path>
               </svg>
