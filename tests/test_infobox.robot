@@ -18,6 +18,6 @@ Infobox: Amazon (company)
 Wikipedia Article Has Infobox
     [Arguments]    ${term}
     Open Wikipedia Page
-    # Search For                 ${term}
+    Search For                 ${term}
     Page Should Have Infobox
     Close Browser Window
