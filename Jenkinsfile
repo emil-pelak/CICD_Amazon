@@ -39,30 +39,30 @@ pipeline {
 
     stage('Run tests') {
       steps {
-        sh '''
-          set -e
-          echo "Cleaning old /tmp/robot-* profiles"
-          find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
+        // bash, żeby działał pipefail i żeby zachować kod wyjścia robota
+        sh """bash -lc '
+set -Eeuo pipefail
+echo "Cleaning old /tmp/robot-* profiles"
+find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
 
-          . "${PY_ENV}/bin/activate"
-          mkdir -p "${ROBOT_DIR}"
+. "${PY_ENV}/bin/activate"
+mkdir -p "${ROBOT_DIR}"
 
-          # Zapisujemy pełne wyjście do pliku (fallback do parsowania)
-          set -o pipefail
-          robot \
-            --outputdir "${ROBOT_DIR}" \
-            --reporttitle "Wikipedia - test report" \
-            --logtitle    "Wikipedia - test log"  \
-            --variable HEADLESS:${HEADLESS} \
-            tests/ 2>&1 | tee "${ROBOT_DIR}/robot_console.txt"
-        '''
+# pełne wyjście do pliku (fallback do parsowania)
+robot \
+  --outputdir "${ROBOT_DIR}" \
+  --reporttitle "Wikipedia - test report" \
+  --logtitle    "Wikipedia - test log"  \
+  --variable HEADLESS:${HEADLESS} \
+  tests/ 2>&1 | tee "${ROBOT_DIR}/robot_console.txt"
+'"""
       }
     }
   }
 
   post {
     always {
-      // ZIP + publikacja raportu – bez screenów
+      // ZIP + publikacja raportu
       sh '''
         set -e
         if [ -d "${ROBOT_DIR}" ]; then
@@ -80,12 +80,12 @@ pipeline {
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
       script {
-        // --- Linki
+        // ----- Linki -----
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // --- Git meta
+        // ----- Git meta -----
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
@@ -94,49 +94,51 @@ pipeline {
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // --- Statystyki: najpierw output.xml, w razie potrzeby fallback -> robot_console.txt
+        // ----- KPIs -----
         int passed = 0, failed = 0
 
-        def jsonFromXml = sh(
+        // 1) Spróbuj z output.xml (Python -> proste K/V bez JsonSlurper)
+        def kv = sh(
           script: """
 python3 - <<'PY'
-import json, os, xml.etree.ElementTree as ET
-d={'passed':0,'failed':0}
-p=os.path.join('${ROBOT_DIR}','output.xml')
+import os, xml.etree.ElementTree as ET
+p='${ROBOT_DIR}/output.xml'
+passed=failed=0
 try:
     if os.path.isfile(p):
-        root=ET.parse(p).getroot()
-        stat=root.find('./statistics/total/stat')
-        if stat is not None:
-            d['passed']=int(stat.get('pass') or 0)
-            d['failed']=int(stat.get('fail') or 0)
+        r=ET.parse(p).getroot()
+        s=r.find('./statistics/total/stat')
+        if s is not None:
+            passed=int(s.get('pass') or 0)
+            failed=int(s.get('fail') or 0)
 except Exception:
     pass
-print(json.dumps(d))
+print(f"PASSED={passed}\\nFAILED={failed}")
 PY
 """,
           returnStdout: true
         ).trim()
 
-        try {
-          def parsed = new groovy.json.JsonSlurperClassic().parseText(jsonFromXml)
-          passed = (parsed.passed ?: 0) as int
-          failed = (parsed.failed ?: 0) as int
-        } catch (ignored) {}
+        def m = (kv =~ /PASSED=(\\d+)\\s+FAILED=(\\d+)/)
+        if (m.find()) {
+          passed = (m.group(1) as int)
+          failed = (m.group(2) as int)
+        }
 
+        // 2) Fallback do robot_console.txt
         if (passed == 0 && failed == 0 && fileExists("${ROBOT_DIR}/robot_console.txt")) {
           def line = sh(
             script: "grep -E '[0-9]+ tests, [0-9]+ passed, [0-9]+ failed' '${ROBOT_DIR}/robot_console.txt' | tail -1 || true",
             returnStdout: true
           ).trim()
-          def m = (line =~ /(\\d+)\\s+tests,\\s+(\\d+)\\s+passed,\\s+(\\d+)\\s+failed/)
-          if (m.find()) {
-            passed = (m.group(2) as int)
-            failed = (m.group(3) as int)
+          def mr = (line =~ /(\\d+)\\s+tests,\\s+(\\d+)\\s+passed,\\s+(\\d+)\\s+failed/)
+          if (mr.find()) {
+            passed = (mr.group(2) as int)
+            failed = (mr.group(3) as int)
           }
         }
 
-        // --- Mail (bez screena)
+        // ----- Mail (bez screena) -----
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
@@ -204,7 +206,7 @@ PY
 </html>
 """
 
-        // Załącz ZIP, jeśli nie jest za duży
+        // Załącz ZIP jeśli nie jest za duży
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
