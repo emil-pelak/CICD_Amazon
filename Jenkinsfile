@@ -39,8 +39,8 @@ pipeline {
 
     stage('Run tests') {
       steps {
-        // bash, żeby działał pipefail i żeby zachować kod wyjścia robota
-        sh """bash -lc '
+        // użyj bash, żeby działał pipefail, a Groovy nic nie interpolował
+        sh(script: '''bash -lc '
 set -Eeuo pipefail
 echo "Cleaning old /tmp/robot-* profiles"
 find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} + || true
@@ -48,14 +48,13 @@ find /tmp -maxdepth 1 -user "$(whoami)" -type d -name "robot-*" -exec rm -rf {} 
 . "${PY_ENV}/bin/activate"
 mkdir -p "${ROBOT_DIR}"
 
-# pełne wyjście do pliku (fallback do parsowania)
 robot \
   --outputdir "${ROBOT_DIR}" \
   --reporttitle "Wikipedia - test report" \
   --logtitle    "Wikipedia - test log"  \
   --variable HEADLESS:${HEADLESS} \
   tests/ 2>&1 | tee "${ROBOT_DIR}/robot_console.txt"
-'"""
+' ''')
       }
     }
   }
@@ -83,7 +82,7 @@ robot \
         // ----- Linki -----
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
-        def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
+        def zipUrl     = "${env.BUILD_URL}artifact/${env.ROBOT_DIR}.zip"
 
         // ----- Git meta -----
         def branch = sh(
@@ -94,16 +93,16 @@ robot \
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // ----- KPIs -----
+        // ----- KPIs: spróbuj z output.xml; fallback: konsola Robota -----
         int passed = 0, failed = 0
 
-        // 1) Spróbuj z output.xml (Python -> proste K/V bez JsonSlurper)
         def kv = sh(
-          script: """
-python3 - <<'PY'
+          script: '''python3 - <<'PY'
 import os, xml.etree.ElementTree as ET
-p='${ROBOT_DIR}/output.xml'
-passed=failed=0
+ws = os.environ.get('WORKSPACE','.')
+rd = os.environ.get('ROBOT_DIR','robot_reports')
+p  = os.path.join(ws, rd, 'output.xml')
+passed = failed = 0
 try:
     if os.path.isfile(p):
         r=ET.parse(p).getroot()
@@ -115,7 +114,7 @@ except Exception:
     pass
 print(f"PASSED={passed}\\nFAILED={failed}")
 PY
-""",
+''',
           returnStdout: true
         ).trim()
 
@@ -125,10 +124,9 @@ PY
           failed = (m.group(2) as int)
         }
 
-        // 2) Fallback do robot_console.txt
-        if (passed == 0 && failed == 0 && fileExists("${ROBOT_DIR}/robot_console.txt")) {
+        if (passed == 0 && failed == 0 && fileExists("${env.ROBOT_DIR}/robot_console.txt")) {
           def line = sh(
-            script: "grep -E '[0-9]+ tests, [0-9]+ passed, [0-9]+ failed' '${ROBOT_DIR}/robot_console.txt' | tail -1 || true",
+            script: "grep -E '[0-9]+ tests, [0-9]+ passed, [0-9]+ failed' '${env.ROBOT_DIR}/robot_console.txt' | tail -1 || true",
             returnStdout: true
           ).trim()
           def mr = (line =~ /(\\d+)\\s+tests,\\s+(\\d+)\\s+passed,\\s+(\\d+)\\s+failed/)
@@ -207,7 +205,7 @@ PY
 """
 
         // Załącz ZIP jeśli nie jest za duży
-        def zipPath   = "${ROBOT_DIR}.zip"
+        def zipPath   = "${env.ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
           try {
