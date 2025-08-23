@@ -31,7 +31,7 @@ pipeline {
           . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          # do obróbki zrzutu
+          # do obróbki zrzutu:
           pip install Pillow
         '''
       }
@@ -60,7 +60,7 @@ pipeline {
 
   post {
     always {
-      // --- snapshot (zawsze, także przy FAIL) + archiwizacja ---
+      // --- Snapshot (również przy FAIL) + ZIP ---
       sh '''
         set -e
         . ${PY_ENV}/bin/activate
@@ -81,7 +81,6 @@ pipeline {
           done
 
           if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
-            # zmniejsz obraz do rozsądnej szerokości (np. 1100px)
             python3 - "${SNAP_RAW}" "${SNAP_OUT}" <<'PY'
 from PIL import Image
 import sys
@@ -95,7 +94,7 @@ im.save(dst)
 PY
             echo "Report snapshot created at ${SNAP_OUT}"
           else
-            echo "WARN: could not create snapshot (no Chrome/Chromium or screenshot failed)."
+            echo "WARN: could not create snapshot."
           fi
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
@@ -113,18 +112,22 @@ PY
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-mail: tylko raport (obraz) ---
+      // --- E-mail: tylko obraz raportu ---
       script {
-        // baza64 obrazu (jeśli jest)
         def b64 = ''
         def snapPath = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(snapPath)) {
           b64 = sh(script: "base64 -w0 '${snapPath}'", returnStdout: true).trim()
         }
 
-        // prosty, czysty mail – wyłącznie zrzut raportu
+        // Zbuduj fragment HTML poza GStringiem (unikamy zagnieżdżonych ${} i \" )
+        String imgHtml = b64 ?
+          ("<img class='snap' src='data:image/png;base64," + b64 + "' alt='Robot report'/>") :
+          "<div style='padding:16px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff;color:#6b7280'>Snapshot unavailable</div>"
+
         String mailSubject = "[${currentBuild.currentResult ?: 'SUCCESS'}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Robot Report"
-        String onlyReportBody = """
+
+        String bodyHtml = """
 <!doctype html>
 <html>
 <head>
@@ -138,18 +141,17 @@ PY
 </head>
 <body>
   <div class="wrap">
-    ${ b64 ? "<img class=\\"snap\\" src=\\"data:image/png;base64,${b64}\\" alt=\\"Robot report\\"/>"
-           : "<div style='padding:16px;border:1px dashed #e5e7eb;border-radius:10px;background:#fff;color:#6b7280'>Snapshot unavailable</div>" }
+    ${imgHtml}
   </div>
 </body>
 </html>
 """
 
-        // dołącz ZIP tylko jeśli mały (opcjonalnie)
+        // Załącz ZIP tylko gdy mały
         def zipPath = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
-          def bytes = (sh(script: "stat -c%s '${zipPath}' || echo 0", returnStdout: true).trim() as long)
+          long bytes = (sh(script: "stat -c%s '${zipPath}' || echo 0", returnStdout: true).trim() as long)
           long maxByte = (env.MAX_ATTACH_MB as Integer) * 1024L * 1024L
           attachZip = (bytes > 0 && bytes <= maxByte)
           echo "ZIP size: ${bytes} bytes (attach <= ${maxByte}) -> attachZip=${attachZip}"
@@ -157,10 +159,10 @@ PY
 
         if (attachZip) {
           emailext(subject: mailSubject, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: onlyReportBody, mimeType: 'text/html', attachmentsPattern: zipPath)
+                   body: bodyHtml, mimeType: 'text/html', attachmentsPattern: zipPath)
         } else {
           emailext(subject: mailSubject, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: onlyReportBody, mimeType: 'text/html')
+                   body: bodyHtml, mimeType: 'text/html')
         }
       }
     }
