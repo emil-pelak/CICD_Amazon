@@ -47,12 +47,14 @@ pipeline {
           . "${PY_ENV}/bin/activate"
           mkdir -p "${ROBOT_DIR}"
 
+          # Zapisujemy pełne wyjście do pliku (fallback do parsowania)
+          set -o pipefail
           robot \
             --outputdir "${ROBOT_DIR}" \
             --reporttitle "Wikipedia - test report" \
             --logtitle    "Wikipedia - test log"  \
             --variable HEADLESS:${HEADLESS} \
-            tests/
+            tests/ 2>&1 | tee "${ROBOT_DIR}/robot_console.txt"
         '''
       }
     }
@@ -60,7 +62,7 @@ pipeline {
 
   post {
     always {
-      // ZIP + publikacja raportu – bez żadnych screenów
+      // ZIP + publikacja raportu – bez screenów
       sh '''
         set -e
         if [ -d "${ROBOT_DIR}" ]; then
@@ -75,16 +77,15 @@ pipeline {
         reportFiles: "report.html",
         reportName: "Robot Report"
       ])
-
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
       script {
-        // Linki
+        // --- Linki
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // Git meta
+        // --- Git meta
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
@@ -93,19 +94,22 @@ pipeline {
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // --- Metryki z output.xml bez użycia XmlSlurper (sandbox-friendly)
-        def statsRaw = sh(
+        // --- Statystyki: najpierw output.xml, w razie potrzeby fallback -> robot_console.txt
+        int passed = 0, failed = 0
+
+        def jsonFromXml = sh(
           script: """
 python3 - <<'PY'
-import json, xml.etree.ElementTree as ET
+import json, os, xml.etree.ElementTree as ET
 d={'passed':0,'failed':0}
+p=os.path.join('${ROBOT_DIR}','output.xml')
 try:
-    root=ET.parse('${ROBOT_DIR}/output.xml').getroot()
-    stat=root.find('./statistics/total/stat')
-    if stat is not None:
-        p=int(stat.get('pass') or 0)
-        f=int(stat.get('fail') or 0)
-        d['passed']=p; d['failed']=f
+    if os.path.isfile(p):
+        root=ET.parse(p).getroot()
+        stat=root.find('./statistics/total/stat')
+        if stat is not None:
+            d['passed']=int(stat.get('pass') or 0)
+            d['failed']=int(stat.get('fail') or 0)
 except Exception:
     pass
 print(json.dumps(d))
@@ -114,37 +118,42 @@ PY
           returnStdout: true
         ).trim()
 
-        int passed = 0
-        int failed = 0
         try {
-          def m = new groovy.json.JsonSlurperClassic().parseText(statsRaw)
-          passed = (m.passed ?: 0) as int
-          failed = (m.failed ?: 0) as int
+          def parsed = new groovy.json.JsonSlurperClassic().parseText(jsonFromXml)
+          passed = (parsed.passed ?: 0) as int
+          failed = (parsed.failed ?: 0) as int
         } catch (ignored) {}
 
-        // Wygląd
+        if (passed == 0 && failed == 0 && fileExists("${ROBOT_DIR}/robot_console.txt")) {
+          def line = sh(
+            script: "grep -E '[0-9]+ tests, [0-9]+ passed, [0-9]+ failed' '${ROBOT_DIR}/robot_console.txt' | tail -1 || true",
+            returnStdout: true
+          ).trim()
+          def m = (line =~ /(\\d+)\\s+tests,\\s+(\\d+)\\s+passed,\\s+(\\d+)\\s+failed/)
+          if (m.find()) {
+            passed = (m.group(2) as int)
+            failed = (m.group(3) as int)
+          }
+        }
+
+        // --- Mail (bez screena)
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
-        String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
+        String mailSubject = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
 
-        // HTML maila (bez screena)
         String body = """
 <!doctype html>
 <html>
 <head>
 <meta charset='utf-8'/>
-<title>${subj}</title>
+<title>${mailSubject}</title>
 <style>
   body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f8fafc; padding:20px }
   .card { background:#fff; border:1px solid #e5e7eb; border-radius:14px; max-width:900px; margin:auto; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.06) }
   .status { background:${statusColor}; color:#fff; padding:16px 20px; font-size:18px; font-weight:700 }
   .sub { color:#e5e7eb; font-weight:500 }
   .section { padding:16px 20px }
-  .grid2 { display:grid; grid-template-columns: repeat(2, minmax(120px,1fr)); gap:12px; padding:4px 20px 8px 20px }
-  .kpi { background:#f9fafb; border:1px solid #eef2f7; border-radius:12px; padding:12px; text-align:center }
-  .kpi .label { font-size:12px; color:#6b7280; display:block }
-  .kpi .val   { font-size:22px; font-weight:800; margin-top:2px }
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
@@ -152,7 +161,10 @@ PY
   .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
   .chip.branch { background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a }
   .chip.sha    { background:#ecfeff; border-color:#cffafe; color:#155e75 }
-  .title { font-weight:700; color:#111827 }
+  .grid2 { display:grid; grid-template-columns: repeat(2, minmax(120px,1fr)); gap:12px; padding:4px 20px 8px 20px }
+  .kpi { background:#f9fafb; border:1px solid #eef2f7; border-radius:12px; padding:12px; text-align:center }
+  .kpi .label { font-size:12px; color:#6b7280; display:block }
+  .kpi .val   { font-size:22px; font-weight:800; margin-top:2px }
   .btns { padding:0 20px 20px 20px }
   a.btn { display:inline-block; margin-right:10px; margin-top:10px; padding:10px 14px; border-radius:10px; text-decoration:none; color:#fff }
   a.primary   { background:#111827 }
@@ -171,13 +183,12 @@ PY
           <div class='row'><span class='label'>SHA</span>    <span class='chip sha'>${shortSha}</span></div>
         </div>
         <div class='box'>
-          <div class='row'><span class='label'>Commit title:</span> <span class='title'>${commitTitle}</span></div>
+          <div class='row'><span class='label'>Commit title:</span> <span style='font-weight:700'>${commitTitle}</span></div>
           <div class='row'><span class='label'>Author:</span> <span>${author}</span></div>
         </div>
       </div>
     </div>
 
-    <!-- TYLKO te dwa KPI: Passed / Failed -->
     <div class='grid2'>
       <div class='kpi'><span class='label'>Passed</span><span class='val'>${passed}</span></div>
       <div class='kpi'><span class='label'>Failed</span><span class='val'>${failed}</span></div>
@@ -206,10 +217,10 @@ PY
         }
 
         if (attachZip) {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+          emailext(subject: mailSubject, from: env.EMAIL_FROM, to: env.EMAIL_TO,
                    body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
         } else {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+          emailext(subject: mailSubject, from: env.EMAIL_FROM, to: env.EMAIL_TO,
                    body: body, mimeType: 'text/html')
         }
       }
