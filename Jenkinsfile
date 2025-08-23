@@ -58,7 +58,6 @@ pipeline {
 
   post {
     always {
-      // ZIP + publikacja HTML + artefakty
       sh '''
         set -e
         if [ -d "$ROBOT_DIR" ]; then
@@ -76,20 +75,19 @@ pipeline {
 
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // E-mail (bez screena)
       script {
-        // Linki
+        // Links
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // Dane GIT
+        // Git meta
         def branch      = sh(script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main', returnStdout: true).trim().replaceFirst(/^origin\\//,'')
         def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Passed/Failed z output.xml
+        // Read Passed/Failed from output.xml (pure Python, no Groovy JSON)
         def xmlPath = "${ROBOT_DIR}/output.xml"
         def pfLine = fileExists(xmlPath)
           ? sh(returnStdout: true, script: """python3 - "${xmlPath}" <<'PY'
@@ -113,11 +111,10 @@ PY
         def passed = (parts.length>0 && parts[0]) ? parts[0].toInteger() : 0
         def failed = (parts.length>1 && parts[1]) ? parts[1].toInteger() : 0
 
-        // Temat / status
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
-        String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Robot Report"
+        String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Robot Report"
 
-        // HTML (przyciski o tej samej szerokości)
+        // Clean ASCII HTML, equal-width buttons
         String body = """
 <!doctype html>
 <html>
@@ -131,18 +128,15 @@ PY
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:16px 18px}
   .box{border:1px solid #eef2f7;border-radius:12px;padding:12px}
   .lbl{color:#6b7280;font-size:12px}
-  .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;border:1px solid #e5e7eb;background:#f9fafb;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid #e5e7eb;border-radius:999px;background:#f9fafb;font-family:ui-monospace,Menlo,Consolas,monospace}
   .branch{background:#eef2ff;border-color:#e0e7ff;color:#1e3a8a}
   .sha{background:#ecfeff;border-color:#cffafe;color:#155e75}
   .stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 18px 14px}
   .stat{border:1px solid #eef2f7;border-radius:12px;padding:14px;text-align:center}
   .stat h3{margin:0 0 6px 0;color:#6b7280;font-weight:600;font-size:13px}
   .stat .n{font-size:28px;font-weight:800;color:#111827}
-
-  /* Równe przyciski */
   .btns{padding:0 18px 18px;display:flex;gap:10px;flex-wrap:wrap}
-  a.btn{flex:1 1 240px;text-align:center;display:inline-block;box-sizing:border-box;
-        padding:12px 16px;border-radius:10px;text-decoration:none;color:#fff;white-space:nowrap}
+  a.btn{flex:1 1 240px;text-align:center;display:inline-block;box-sizing:border-box;padding:12px 16px;border-radius:10px;text-decoration:none;color:#fff;white-space:nowrap}
   .b1{background:#111827}.b2{background:#374151}.b3{background:#0ea5e9}
 </style>
 </head>
@@ -173,5 +167,34 @@ PY
     </div>
 
     <div class="btns">
-      <a class="btn b1" href="${reportUrl}"  target="_blank">🔎 Open "Wikipedia - test report"</a>
-      <a class="btn b2" href="${consoleUrl}" target="_blank">🖥 Cons_
+      <a class="btn b1" href="${reportUrl}"  target="_blank">Open "Wikipedia - test report"</a>
+      <a class="btn b2" href="${consoleUrl}" target="_blank">Console Output</a>
+      <a class="btn b3" href="${zipUrl}"     target="_blank">Download results (ZIP)</a>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+        def zipPath   = "${ROBOT_DIR}.zip"
+        def attachZip = false
+        if (fileExists(zipPath)) {
+          try {
+            long bytes   = (sh(script: "stat -c%s '${zipPath}' || echo 0", returnStdout: true).trim() as long)
+            long maxByte = (env.MAX_ATTACH_MB as Integer) * 1024L * 1024L
+            attachZip = (bytes > 0 && bytes <= maxByte)
+            echo "ZIP size: ${bytes} bytes (attach <= ${maxByte}) -> attachZip=${attachZip}"
+          } catch (ignored) {}
+        }
+
+        if (attachZip) {
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
+        } else {
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html')
+        }
+      }
+    }
+  }
+}
