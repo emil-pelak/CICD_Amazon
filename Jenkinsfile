@@ -89,7 +89,7 @@ pipeline {
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // --- Passed/Failed z output.xml (fix: prawdziwa ścieżka przekazana do Pythona) ---
+        // Passed/Failed z output.xml
         def xmlPath = "${ROBOT_DIR}/output.xml"
         def pfLine = fileExists(xmlPath)
           ? sh(returnStdout: true, script: """python3 - "${xmlPath}" <<'PY'
@@ -117,7 +117,7 @@ PY
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} – Robot Report"
 
-        // Prosty, lekki HTML
+        // HTML (przyciski o tej samej szerokości)
         String body = """
 <!doctype html>
 <html>
@@ -138,8 +138,11 @@ PY
   .stat{border:1px solid #eef2f7;border-radius:12px;padding:14px;text-align:center}
   .stat h3{margin:0 0 6px 0;color:#6b7280;font-weight:600;font-size:13px}
   .stat .n{font-size:28px;font-weight:800;color:#111827}
-  .btns{padding:0 18px 18px}
-  a.btn{display:inline-block;margin-right:10px;margin-top:8px;padding:10px 14px;border-radius:10px;text-decoration:none;color:#fff}
+
+  /* Równe przyciski */
+  .btns{padding:0 18px 18px;display:flex;gap:10px;flex-wrap:wrap}
+  a.btn{flex:1 1 240px;text-align:center;display:inline-block;box-sizing:border-box;
+        padding:12px 16px;border-radius:10px;text-decoration:none;color:#fff;white-space:nowrap}
   .b1{background:#111827}.b2{background:#374151}.b3{background:#0ea5e9}
 </style>
 </head>
@@ -171,35 +174,4 @@ PY
 
     <div class="btns">
       <a class="btn b1" href="${reportUrl}"  target="_blank">🔎 Open "Wikipedia - test report"</a>
-      <a class="btn b2" href="${consoleUrl}" target="_blank">🖥 Console Output</a>
-      <a class="btn b3" href="${zipUrl}"     target="_blank">📦 Download results (ZIP)</a>
-    </div>
-  </div>
-</body>
-</html>
-"""
-
-        // Załącz ZIP tylko jeśli mały
-        def zipPath   = "${ROBOT_DIR}.zip"
-        def attachZip = false
-        if (fileExists(zipPath)) {
-          try {
-            long bytes   = (sh(script: "stat -c%s '${zipPath}' || echo 0", returnStdout: true).trim() as long)
-            long maxByte = (env.MAX_ATTACH_MB as Integer) * 1024L * 1024L
-            attachZip = (bytes > 0 && bytes <= maxByte)
-            echo "ZIP size: ${bytes} bytes (attach <= ${maxByte}) -> attachZip=${attachZip}"
-          } catch (ignored) {}
-        }
-
-        if (attachZip) {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: body, mimeType: 'text/html',
-                   attachmentsPattern: zipPath)
-        } else {
-          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
-                   body: body, mimeType: 'text/html')
-        }
-      }
-    }
-  }
-}
+      <a class="btn b2" href="${consoleUrl}" target="_blank">🖥 Cons_
