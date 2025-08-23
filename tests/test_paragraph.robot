@@ -16,6 +16,6 @@ Paragraph: Python (programming language)
 Wikipedia Article Has First Paragraph
     [Arguments]    ${term}
     Open Wikipedia Page
-    # Search For                 ${term}
+    Search For                 ${term}
     Page Should Have First Paragraph
     Close Browser Window
