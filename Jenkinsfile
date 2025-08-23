@@ -1,16 +1,13 @@
-// Jenkinsfile
-// CICD_Wikipedia – Robot Framework + Selenium + e-mail z podglądem raportu (snapshot 50%)
-
 pipeline {
   agent any
 
   environment {
     ROBOT_DIR      = "robot_reports"
     PY_ENV         = "venv"
-    HEADLESS       = "true"                 // uruchamiaj przeglądarkę w headless
+    HEADLESS       = "true"
     EMAIL_FROM     = "emil-pelak@wp.pl"
     EMAIL_TO       = "emil-pelak@outlook.com"
-    MAX_ATTACH_MB  = "7"                    // maks. rozmiar załącznika ZIP do e-maila
+    MAX_ATTACH_MB  = "7"           // limit załącznika ZIP
   }
 
   stages {
@@ -35,7 +32,7 @@ pipeline {
           . ${PY_ENV}/bin/activate
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          # do obróbki zrzutu ekranu (zmniejszenie do 50%)
+          # do kadrowania/skalowania obrazka
           pip install Pillow
         '''
       }
@@ -64,52 +61,98 @@ pipeline {
 
   post {
     always {
-      // --- Snapshot i ZIP (rób nawet przy FAIL) ---
+      // --- Snapshot: WYCIĄGAMY TYLKO TABELKI (Summary + Test Statistics), SKALUJEMY DO 50% ---
       sh '''
         set -e
         . ${PY_ENV}/bin/activate
 
         HTML="$(readlink -f ${ROBOT_DIR}/report.html || true)"
+        FOCUS_HTML="${ROBOT_DIR}/report_focus.html"
         SNAP_RAW="${ROBOT_DIR}/report_raw.png"
         SNAP="${ROBOT_DIR}/report_snapshot.png"
 
         if [ -n "$HTML" ] && [ -f "$HTML" ]; then
+          # Zbuduj minimalny HTML tylko z wartościowymi tabelami
+          python - <<'PY'
+import re, pathlib, sys
+src = pathlib.Path("${HTML}").read_text(encoding="utf-8", errors="ignore")
+
+# CSS z oryginału
+m_style = re.search(r"<style[^>]*>(.*?)</style>", src, re.S|re.I)
+css = m_style.group(1) if m_style else ""
+
+# Rdzeń: od "Summary Information" do tuż przed "Test Details"
+m_core = re.search(r"(<h2[^>]*>\\s*Summary Information.*?)(?=<h2[^>]*>\\s*Test Details)", src, re.S|re.I)
+if not m_core:
+    # fallback: od "Test Statistics" do "Test Details"
+    m_core = re.search(r"(<h2[^>]*>\\s*Test Statistics.*?)(?=<h2[^>]*>\\s*Test Details)", src, re.S|re.I)
+
+core = m_core.group(1) if m_core else src
+
+# Delikatne odchudzenie (usuwamy log link/boksy detali jeśli by się zawieruszyły)
+core = re.sub(r"<h2[^>]*>\\s*Test Details[\\s\\S]*$", "", core, flags=re.I)
+
+minimal = f"""<!doctype html>
+<html><head><meta charset="utf-8">
+<style>{css}</style>
+<style>
+  body {{ background:#ffffff; margin:8px; }}
+  #log {{ display:none !important; }}
+  .statistics, .content {{ max-width:1200px; margin:auto; }}
+</style>
+</head><body>
+{core}
+</body></html>"""
+pathlib.Path("${FOCUS_HTML}").write_text(minimal, encoding="utf-8")
+PY
+
+          # Screenshot skoncentrowanego widoku
           okshot=0
           for B in google-chrome google-chrome-stable chromium chromium-browser; do
             if command -v "$B" >/dev/null 2>&1; then
-              "$B" --headless=new --disable-gpu --no-sandbox \
-                  --hide-scrollbars \
-                  --force-device-scale-factor=1.0 \
-                  --window-size=1600,1500 \
-                  --screenshot="${SNAP_RAW}" "file://${HTML}" && okshot=1 && break
+              "$B" --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
+                  --window-size=1400,1000 \
+                  --screenshot="${SNAP_RAW}" "file://${FOCUS_HTML}" && okshot=1 && break
             fi
           done
 
           if [ "$okshot" -eq 1 ] && [ -s "${SNAP_RAW}" ]; then
-            # zmniejsz do 50% (fizycznie) i zapisz finalny snapshot
-            python3 - "${SNAP_RAW}" "${SNAP}" <<'PY' || true
-from PIL import Image
-import sys
-src, dst = sys.argv[1], sys.argv[2]
-im = Image.open(src).convert("RGB")
-w, h = im.size
-im = im.resize((w//2, h//2), Image.Resampling.LANCZOS)
-im.save(dst, optimize=True)   # PNG z mniejszym rozmiarem
-print(f"Saved {dst} ({im.size[0]}x{im.size[1]})")
+            # Kadrowanie ramek + zmniejszenie do 50%
+            python - <<'PY'
+from PIL import Image, ImageChops
+from pathlib import Path
+raw = Path("${SNAP_RAW}")
+out = Path("${SNAP}")
+im = Image.open(raw).convert("RGB")
+
+# Przytnij jednolite marginesy (białe tło)
+bg = Image.new(im.mode, im.size, im.getpixel((0,0)))
+diff = ImageChops.difference(im, bg)
+bbox = diff.getbbox() or (0,0,im.width,im.height)
+l,t,r,b = bbox
+
+# Bezpieczny margines dookoła, żeby nic nie uciąć
+pad = 8
+l = max(0, l-pad); t = max(0, t-pad); r = min(im.width, r+pad); b = min(im.height, b+pad)
+im = im.crop((l,t,r,b))
+
+# Skala 50% (połowa)
+im = im.resize((max(1,im.width//2), max(1,im.height//2)), Image.LANCZOS)
+im.save(out, optimize=True, quality=85)
 PY
-            rm -f "${SNAP_RAW}" || true
             echo "Report snapshot created at ${SNAP}"
           else
-            echo "WARN: could not create snapshot."
+            echo "WARN: could not create focused snapshot."
           fi
         else
           echo "WARN: ${ROBOT_DIR}/report.html not found – skipping snapshot."
         fi
 
+        # Zawsze spakuj artefakty robota
         ( cd ${ROBOT_DIR} && zip -9qr ../${ROBOT_DIR}.zip . ) || true
       '''
 
-      // publikacja raportu i artefaktów – zawsze (PASS/FAIL)
+      // Opublikuj i zarchiwizuj
       publishHTML(target: [
         allowMissing: true,
         keepAll: true,
@@ -119,39 +162,35 @@ PY
       ])
       archiveArtifacts artifacts: "${ROBOT_DIR}/**, ${ROBOT_DIR}.zip", fingerprint: true
 
-      // --- E-MAIL z wbudowanym snapshotem ---
+      // --- E-mail z ładnym meta i wklejonym snapshotem ---
       script {
-        // Linki
         def reportUrl  = "${env.BUILD_URL}Robot_20Report/"
         def consoleUrl = "${env.BUILD_URL}console"
         def zipUrl     = "${env.BUILD_URL}artifact/${ROBOT_DIR}.zip"
 
-        // Metadane Gita (bezpieczne fallbacki)
         def branch = sh(
           script: 'git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev/main',
           returnStdout: true
         ).trim().replaceFirst(/^origin\\//,'')
-        def shortSha    = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
-        def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
-        def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def shortSha   = sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo ???????', returnStdout: true).trim()
+        def commitTitle= sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
+        def author     = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Obrazek (inline base64) lub placeholder
+        // Snapshot inline (jeśli jest), bez zbędnych ramek
         def imgTag = ''
         def shot   = "${env.WORKSPACE}/${ROBOT_DIR}/report_snapshot.png"
         if (fileExists(shot)) {
           def b64 = sh(script: "base64 -w0 '${shot}'", returnStdout: true).trim()
-          imgTag = '<img class="thumb" src="data:image/png;base64,' + b64 + '" alt="Robot report snapshot"/>'
+          imgTag = '<img style="width:100%;max-width:880px;border:1px solid #eef2f7;border-radius:10px;display:block" src="data:image/png;base64,' + b64 + '" alt="Robot report tables"/>'
         } else {
-          imgTag = '<div class="thumb" style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280;text-align:center">Snapshot unavailable</div>'
+          imgTag = '<div style="border:1px dashed #e5e7eb;border-radius:10px;padding:14px;color:#6b7280">Snapshot unavailable</div>'
         }
 
-        // Nagłówki e-maila
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String statusColor = (buildStatus == 'SUCCESS') ? '#16a34a' : '#dc2626'
         String statusIcon  = (buildStatus == 'SUCCESS') ? '✅' : '❌'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Wikipedia - test report"
 
-        // Treść e-maila (bez sekcji KPI, ładne meta Gita, mniejszy obrazek)
         String body = """
 <!doctype html>
 <html>
@@ -170,9 +209,6 @@ PY
   a.primary   { background:#111827 }
   a.secondary { background:#374151 }
   a.zip       { background:#0ea5e9 }
-  img.thumb { width:100%; max-width:440px; border:1px solid #eef2f7; border-radius:10px; display:block; }
-
-  /* Commit meta */
   .meta { display:grid; grid-template-columns: 1fr 1fr; gap:12px }
   .box  { border:1px solid #eef2f7; border-radius:12px; padding:12px }
   .row  { margin:6px 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
@@ -180,7 +216,6 @@ PY
   .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid #e5e7eb; background:#f9fafb }
   .chip.branch { background:#eef2ff; border-color:#e0e7ff; color:#1e3a8a }
   .chip.sha    { background:#ecfeff; border-color:#cffafe; color:#155e75 }
-
   .ic { width:18px; height:18px; vertical-align:middle }
   .title { font-weight:700; color:#111827 }
   .author { color:#111827 }
@@ -192,7 +227,6 @@ PY
 
     <div class="section">
       <div class="h">
-        <!-- Git logo (inline SVG) -->
         <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="5" y="5" width="14" height="14" rx="3" ry="3" fill="#f1502f" transform="rotate(45 12 12)"></rect>
           <circle cx="10" cy="10" r="1.8" fill="white"></circle>
@@ -207,7 +241,6 @@ PY
         <div class="box">
           <div class="row">
             <span class="label">
-              <!-- Branch icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="6" cy="6" r="2.2" fill="#1e3a8a"></circle>
                 <circle cx="18" cy="6" r="2.2" fill="#1e3a8a"></circle>
@@ -221,7 +254,6 @@ PY
 
           <div class="row">
             <span class="label">
-              <!-- Hash icon -->
               <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M9 3 L7 21 M17 3 L15 21 M4 9 H20 M3 15 H19" stroke="#155e75" stroke-width="2" fill="none" stroke-linecap="round"></path>
               </svg>
@@ -250,7 +282,7 @@ PY
 </html>
 """
 
-        // Załącz ZIP jeśli nie za duży
+        // dołącz ZIP tylko jeśli mieści się w limicie
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
