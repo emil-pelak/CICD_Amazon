@@ -26,7 +26,7 @@ Search: Amazon (company)
 Wikipedia Search Should Succeed
     [Arguments]    ${term}
     Open Wikipedia Page
-    # Search For                 ${term}
+    Search For                 ${term}
     Heading Should Contain     ${term}
     Page Should Have First Paragraph
     Close Browser Window
