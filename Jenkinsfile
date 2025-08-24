@@ -1,5 +1,6 @@
 pipeline {
-  agent any
+  agent { label 'built-in' }                 // wszystko na Built-In Node
+  options { skipDefaultCheckout(true) }      // usuń automatyczny „Declarative: Checkout SCM”
 
   environment {
     ROBOT_DIR     = 'robot_reports'
@@ -87,7 +88,7 @@ pipeline {
         def commitTitle = sh(script: 'git log -1 --pretty=%s 2>/dev/null || echo "-"', returnStdout: true).trim()
         def author      = sh(script: 'git log -1 --pretty=%an 2>/dev/null || echo "-"', returnStdout: true).trim()
 
-        // Read Passed/Failed from output.xml (pure Python, no Groovy JSON)
+        // Passed/Failed z output.xml
         def xmlPath = "${ROBOT_DIR}/output.xml"
         def pfLine = fileExists(xmlPath)
           ? sh(returnStdout: true, script: """python3 - "${xmlPath}" <<'PY'
@@ -114,7 +115,6 @@ PY
         String buildStatus = currentBuild.currentResult ?: 'SUCCESS'
         String subj        = "[${buildStatus}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - Robot Report"
 
-        // Clean ASCII HTML, equal-width buttons
         String body = """
 <!doctype html>
 <html>
@@ -143,7 +143,6 @@ PY
 <body>
   <div class="card">
     <div class="hdr">${buildStatus} • ${env.JOB_NAME} • Build #${env.BUILD_NUMBER}</div>
-
     <div class="grid">
       <div class="box">
         <div class="lbl">Branch</div>
@@ -160,12 +159,10 @@ PY
         <div>${author}</div>
       </div>
     </div>
-
     <div class="stats">
       <div class="stat"><h3>Passed</h3><div class="n">${passed}</div></div>
       <div class="stat"><h3>Failed</h3><div class="n">${failed}</div></div>
     </div>
-
     <div class="btns">
       <a class="btn b1" href="${reportUrl}"  target="_blank">Open "Wikipedia - test report"</a>
       <a class="btn b2" href="${consoleUrl}" target="_blank">Console Output</a>
@@ -175,7 +172,6 @@ PY
 </body>
 </html>
 """
-
         def zipPath   = "${ROBOT_DIR}.zip"
         def attachZip = false
         if (fileExists(zipPath)) {
@@ -186,7 +182,6 @@ PY
             echo "ZIP size: ${bytes} bytes (attach <= ${maxByte}) -> attachZip=${attachZip}"
           } catch (ignored) {}
         }
-
         if (attachZip) {
           emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
                    body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
