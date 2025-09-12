@@ -18,7 +18,7 @@ Search: Docker (software)
 Search: Git
     Git
 Search: Linux
-    Linux
+    Linux (kernel)
 Search: Amazon (company)
     Amazon (company)
 
