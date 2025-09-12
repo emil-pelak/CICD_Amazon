@@ -7,6 +7,7 @@ pipeline {
     PY_ENV        = 'venv'
     HEADLESS      = 'true'
     EMAIL_FROM    = 'emil-pelak@wp.pl'
+    EMAIL_TO      = 'emil-pelak@outlook.com'
     MAX_ATTACH_MB = '7'
   }
 
@@ -182,20 +183,11 @@ PY
           } catch (ignored) {}
         }
         if (attachZip) {
-          emailext(
-            subject: subj,
-            from: env.EMAIL_FROM,
-            body: body,
-            mimeType: 'text/html',
-            attachmentsPattern: zipPath
-          )
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html', attachmentsPattern: zipPath)
         } else {
-          emailext(
-            subject: subj,
-            from: env.EMAIL_FROM,
-            body: body,
-            mimeType: 'text/html'
-          )
+          emailext(subject: subj, from: env.EMAIL_FROM, to: env.EMAIL_TO,
+                   body: body, mimeType: 'text/html')
         }
       }
     }
